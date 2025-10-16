@@ -1,0 +1,68 @@
+@@ class RhymeEngine {
+-  static const double slantThreshold = 0.50;
+-  static const double mutualThreshold = 0.50;
+-  static const double endOfLineThreshold = 0.45;
+-  static const double endOfLineBoost = 1.2;
++  static const double slantThreshold = 0.60; // tightened
++  static const double mutualThreshold = 0.65; // avoids overgrouping
++  static const double endOfLineThreshold = 0.55; // stricter
++  static const double endOfLineBoost = 1.3; // slightly stronger
+
+@@ List<RhymeAnnotation> analyze(String text) {
++    // 🔁 Motif pass: detect repeated units and group them
++    final motifGroups = <String, int>{};
++    int motifGroupId = 9000;
++    for (int i = 0; i < allUnits.length; i++) {
++      final key = allUnits[i].text.toLowerCase();
++      if (!motifGroups.containsKey(key)) {
++        final matches = allUnits
++            .where((u) => u.text.toLowerCase() == key)
++            .toList();
++        if (matches.length > 1) {
++          motifGroups[key] = motifGroupId++;
++        }
++      }
++    }
+
++    motifGroups.forEach((text, groupId) {
++      for (int i = 0; i < allUnits.length; i++) {
++        if (allUnits[i].text.toLowerCase() == text) {
++          annotations.add(RhymeAnnotation(
++            word: allUnits[i].text,
++            start: allUnits[i].start,
++            end: allUnits[i].end,
++            groupId: groupId,
++            type: RhymeType.motif,
++            strength: 1.0,
++          ));
++        }
++      }
++    });
+
+@@ double _syllableSimilarityWeighted(List<String> a, List<String> b)
+-    final aVowel = a.firstWhere(
+-      (p) => p.contains(RegExp(r'[012]')),
+-      orElse: () => '',
+-    );
+-    final bVowel = b.firstWhere(
+-      (p) => p.contains(RegExp(r'[012]')),
+-      orElse: () => '',
+-    );
++    // Extract vowel core for more robust matching
++    final aVowel = a.firstWhere((p) => RegExp(r'[AEIOU]').hasMatch(p),
++        orElse: () => '');
++    final bVowel = b.firstWhere((p) => RegExp(r'[AEIOU]').hasMatch(p),
++        orElse: () => '');
+
+@@ for (int i = 0; i < allUnits.length; i++)
+         final passes =
+             (isEndMatch && score >= endOfLineThreshold) ||
+             score >= mutualThreshold;
++
++        // 🔒 Mutual agreement check — prevent weak group additions
++        if (passes) {
++          final backScore =
++              _syllableSimilarityWeighted(syllables[j], syllables[i]);
++          if (backScore < mutualThreshold) continue;
++        }
+
