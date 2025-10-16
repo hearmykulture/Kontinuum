@@ -1,3 +1,6 @@
+mkdir -p .github/workflows
+
+cat > .github/workflows/main.yml <<'YAML'
 name: Flutter CI
 
 on:
@@ -28,11 +31,11 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
-      # Just sets ANDROID_HOME and puts sdkmanager on PATH
+      # Sets ANDROID_HOME and puts sdkmanager on PATH
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      # Install what Flutter/Gradle need to build a debug APK
+      # Install packages explicitly (avoids the multiline parsing issue)
       - name: Install Android packages
         run: |
           sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
@@ -69,3 +72,4 @@ jobs:
           name: app-debug-apk
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: warn
+YAML
