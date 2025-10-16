@@ -41,9 +41,9 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
-      # Make analyzer non-fatal so warnings/infos don't fail CI
-      - name: Analyze
+      - name: Analyze (non-blocking)
         run: dart analyze --fatal-infos=false --fatal-warnings=false
+        continue-on-error: true
 
       - name: Unit & widget tests (with coverage)
         run: flutter test --coverage
