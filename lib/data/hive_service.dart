@@ -8,135 +8,153 @@ import 'package:kontinuum/models/milestone.dart';
 import 'package:kontinuum/models/mission.dart';
 
 class HiveService {
+  // Box names (single source of truth)
   static const String skillBoxName = 'skillsBox';
   static const String statBoxName = 'statsBox';
   static const String categoryBoxName = 'categoriesBox';
   static const String staticObjectivesBoxName = 'staticObjectivesBox';
-  static const String objectivesByDateBoxName = 'objectivesByDateBox';
+  static const String objectivesByDateBoxName =
+      'objectivesByDateBox'; // untyped
   static const String statHistoryBoxName = 'statHistoryBox';
   static const String milestoneBoxName = 'milestoneBox';
+  static const String activeMissionsBoxName = 'activeMissionsBox';
 
-  // ✅ Skills
+  // ---------- Helpers ----------
+
+  /// Open a typed box if needed, otherwise return the already-opened box.
+  Future<Box<T>> _openBoxIfNeeded<T>(String name) async {
+    if (Hive.isBoxOpen(name)) return Hive.box<T>(name);
+    return Hive.openBox<T>(name);
+  }
+
+  /// Open an **untyped** box (used for objectivesByDate).
+  Future<Box> _openUntypedBoxIfNeeded(String name) async {
+    if (Hive.isBoxOpen(name)) return Hive.box(name);
+    return Hive.openBox(name);
+  }
+
+  // ---------- Skills ----------
+
   Future<void> saveSkills(List<Skill> skills) async {
-    final box = Hive.box<Skill>(skillBoxName);
+    final box = await _openBoxIfNeeded<Skill>(skillBoxName);
     await box.clear();
-    for (final skill in skills) {
-      await box.put(skill.id, skill);
-    }
+    await box.putAll({for (final s in skills) s.id: s});
   }
 
   Future<List<Skill>> loadSkills() async {
-    final box = Hive.box<Skill>(skillBoxName);
-    return box.values.toList();
+    final box = await _openBoxIfNeeded<Skill>(skillBoxName);
+    return box.values.toList(growable: false);
   }
 
-  // ✅ Stats
+  // ---------- Stats ----------
+
   Future<void> saveStats(Map<String, Stat> stats) async {
-    final box = Hive.box<Stat>(statBoxName);
+    final box = await _openBoxIfNeeded<Stat>(statBoxName);
     await box.clear();
-    for (final stat in stats.values) {
-      await box.put(stat.id, stat);
-    }
+    await box.putAll(stats);
   }
 
   Future<Map<String, Stat>> loadStats() async {
-    final box = Hive.box<Stat>(statBoxName);
-    return {for (var stat in box.values) stat.id: stat};
+    final box = await _openBoxIfNeeded<Stat>(statBoxName);
+    return {for (final s in box.values) s.id: s};
   }
 
-  // ✅ Categories
+  // ---------- Categories ----------
+
   Future<void> saveCategories(Map<String, Category> categories) async {
-    final box = Hive.box<Category>(categoryBoxName);
+    final box = await _openBoxIfNeeded<Category>(categoryBoxName);
     await box.clear();
-    for (final cat in categories.values) {
-      await box.put(cat.id, cat);
-    }
+    await box.putAll(categories);
   }
 
   Future<Map<String, Category>> loadCategories() async {
-    final box = Hive.box<Category>(categoryBoxName);
-    return {for (var cat in box.values) cat.id: cat};
+    final box = await _openBoxIfNeeded<Category>(categoryBoxName);
+    return {for (final c in box.values) c.id: c};
   }
 
-  // ✅ Static Objectives
+  // ---------- Static Objectives ----------
+
   Future<void> saveStaticObjectives(List<Objective> objectives) async {
-    final box = Hive.box<Objective>(staticObjectivesBoxName);
+    final box = await _openBoxIfNeeded<Objective>(staticObjectivesBoxName);
     await box.clear();
-    for (final obj in objectives) {
-      await box.put(obj.id, obj);
-    }
+    await box.putAll({for (final o in objectives) o.id: o});
   }
 
   Future<List<Objective>> loadStaticObjectives() async {
-    final box = Hive.box<Objective>(staticObjectivesBoxName);
-    return box.values.toList();
+    final box = await _openBoxIfNeeded<Objective>(staticObjectivesBoxName);
+    return box.values.toList(growable: false);
   }
 
-  // ✅ Daily Objectives by Date
+  // ---------- Objectives by Date (UNtyped box) ----------
+  // Keys: String (ISO day string for now)
+  // Value: List<Objective>
+
   Future<void> saveObjectivesByDate(Map<DateTime, List<Objective>> data) async {
-    final box = Hive.box(objectivesByDateBoxName);
+    final box = await _openUntypedBoxIfNeeded(objectivesByDateBoxName);
     await box.clear();
-    for (final entry in data.entries) {
-      final key = entry.key.toIso8601String();
-      await box.put(key, entry.value);
-    }
+
+    // Store as: { '2025-10-16T00:00:00.000': <List<Objective>> }
+    final map = <String, List<Objective>>{
+      for (final e in data.entries) e.key.toIso8601String(): e.value,
+    };
+
+    await box.putAll(map);
   }
 
   Future<Map<DateTime, List<Objective>>> loadObjectivesByDate() async {
-    final box = Hive.box(objectivesByDateBoxName);
-    return {
-      for (var key in box.keys)
-        DateTime.parse(key): List<Objective>.from(box.get(key) ?? []),
-    };
+    final box = await _openUntypedBoxIfNeeded(objectivesByDateBoxName);
+
+    final out = <DateTime, List<Objective>>{};
+    // Cast keys to String and values to List<Objective>
+    for (final key in box.keys.cast<String>()) {
+      final raw = box.get(key);
+      final list = (raw as List?)?.cast<Objective>() ?? const <Objective>[];
+      out[DateTime.parse(key)] = list;
+    }
+    return out;
   }
 
-  // ✅ Stat History
+  // ---------- Stat History ----------
+
   Future<void> saveStatHistory(List<StatHistoryEntry> entries) async {
-    final box = Hive.box<StatHistoryEntry>(statHistoryBoxName);
+    final box = await _openBoxIfNeeded<StatHistoryEntry>(statHistoryBoxName);
     await box.clear();
-    for (int i = 0; i < entries.length; i++) {
-      await box.put(i, entries[i]);
-    }
+    await box.putAll({for (var i = 0; i < entries.length; i++) i: entries[i]});
   }
 
   Future<List<StatHistoryEntry>> loadStatHistory() async {
-    final box = Hive.box<StatHistoryEntry>(statHistoryBoxName);
-    return box.values.toList();
+    final box = await _openBoxIfNeeded<StatHistoryEntry>(statHistoryBoxName);
+    return box.values.toList(growable: false);
   }
 
-  // ✅ Milestones
+  // ---------- Milestones ----------
+
   Future<void> saveMilestones(Map<String, Milestone> milestones) async {
-    final box = Hive.box<Milestone>(milestoneBoxName);
+    final box = await _openBoxIfNeeded<Milestone>(milestoneBoxName);
     await box.clear();
-    for (final entry in milestones.entries) {
-      await box.put(entry.key, entry.value);
-    }
+    await box.putAll(milestones);
   }
 
   Future<Map<String, Milestone>> loadMilestones() async {
-    final box = Hive.box<Milestone>(milestoneBoxName);
-    final Map<String, Milestone> result = {};
-    for (final key in box.keys) {
-      final milestone = box.get(key);
-      if (milestone != null) {
-        result[key.toString()] = milestone;
-      }
+    final box = await _openBoxIfNeeded<Milestone>(milestoneBoxName);
+    final result = <String, Milestone>{};
+    for (final key in box.keys.cast<String>()) {
+      final m = box.get(key);
+      if (m != null) result[key] = m;
     }
     return result;
   }
 
-  static const String activeMissionsBoxName = 'activeMissionsBox';
+  // ---------- Active Missions ----------
 
   Future<void> saveActiveMissions(List<Mission> missions) async {
-    final box = Hive.box<Mission>(activeMissionsBoxName);
+    final box = await _openBoxIfNeeded<Mission>(activeMissionsBoxName);
     await box.clear();
-    for (int i = 0; i < missions.length; i++) {
-      await box.put(missions[i].id, missions[i]);
-    }
+    await box.putAll({for (final m in missions) m.id: m});
   }
 
   Future<List<Mission>> loadActiveMissions() async {
-    final box = Hive.box<Mission>(activeMissionsBoxName);
-    return box.values.toList();
+    final box = await _openBoxIfNeeded<Mission>(activeMissionsBoxName);
+    return box.values.toList(growable: false);
   }
 }

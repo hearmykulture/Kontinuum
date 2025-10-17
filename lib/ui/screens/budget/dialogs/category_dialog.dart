@@ -24,15 +24,26 @@ class _CategoryDialogState extends State<CategoryDialog> {
   @override
   void initState() {
     super.initState();
-    _nameCtrl = TextEditingController(text: widget.existing?['name'] ?? '');
-    _capCtrl = TextEditingController(
-      text: (widget.existing != null && (widget.existing!['cap'] ?? 0) > 0)
-          ? (widget.existing!['cap']).toString()
-          : '',
-    );
-    _colorValue =
-        widget.existing?['color'] as int? ??
-        widget.palette.first.toARGB32(); // ⬅️ no .value
+
+    final existing = widget.existing;
+
+    final String initialName = (existing?['name'] as String?) ?? '';
+    final num? capNum = existing?['cap'] is num
+        ? existing!['cap'] as num
+        : null;
+    final String initialCapText = (capNum != null && capNum > 0)
+        ? capNum.toString()
+        : '';
+
+    // color may be stored as int (preferred) or Color; fall back to first palette color
+    final dynamic rawColor = existing?['color'];
+    final int initialColor = rawColor is int
+        ? rawColor
+        : (rawColor is Color ? rawColor.value : widget.palette.first.value);
+
+    _nameCtrl = TextEditingController(text: initialName);
+    _capCtrl = TextEditingController(text: initialCapText);
+    _colorValue = initialColor;
   }
 
   @override
@@ -77,9 +88,9 @@ class _CategoryDialogState extends State<CategoryDialog> {
               spacing: 8,
               runSpacing: 8,
               children: widget.palette.map((c) {
-                final selected = _colorValue == c.toARGB32(); // ⬅️ no .value
+                final selected = _colorValue == c.value;
                 return GestureDetector(
-                  onTap: () => setState(() => _colorValue = c.toARGB32()),
+                  onTap: () => setState(() => _colorValue = c.value),
                   child: Container(
                     width: 28,
                     height: 28,
@@ -113,7 +124,7 @@ class _CategoryDialogState extends State<CategoryDialog> {
             Navigator.pop<Map<String, dynamic>>(context, {
               'name': name,
               'cap': cap,
-              'color': _colorValue,
+              'color': _colorValue, // int ARGB32
             });
           },
           child: const Text('Save', style: TextStyle(color: Colors.black)),
