@@ -50,7 +50,6 @@ class ObjectiveProvider with ChangeNotifier {
   Map<String, int> _previousStats = {};
 
   // ── Tally overage balance knobs (percentages) ─────────────────────────────
-  // First extra = 50%, then -10% per additional extra, floor at 10%.
   static const double _tallyExtraStartPct = 0.50;
   static const double _tallyExtraStepPct = 0.10;
   static const double _tallyExtraFloorPct = 0.10;
@@ -62,7 +61,7 @@ class ObjectiveProvider with ChangeNotifier {
     _init();
   }
 
-  // ---------- Small getters for UI / management ----------
+  // ---------- Small getters ----------
   List<Objective> get staticObjectives => List.unmodifiable(_staticObjectives);
   List<Objective> getObjectivesForExactDate(DateTime date) =>
       List.unmodifiable(_objectivesByDate[_normalize(date)] ?? []);
@@ -118,7 +117,6 @@ class ObjectiveProvider with ChangeNotifier {
     String? description,
     String? writingBlockId,
     bool isStatic = false,
-    // new schedule knobs (already wired elsewhere)
     int? repeatEveryNDays,
     DateTime? repeatAnchorDate,
   }) {
@@ -177,9 +175,8 @@ class ObjectiveProvider with ChangeNotifier {
     final xp = obj.actualXpEarned ?? obj.xpReward;
 
     if (obj.isCompleted) {
-      // Toggle to INCOMPLETE — keep whatever progress amount was set upstream.
+      // Toggle to INCOMPLETE — keep progress
       obj.isCompleted = false;
-      // obj.completedAmount = 0;  // ❌ do not wipe progress
       obj.completedOn = null;
 
       for (final catId in obj.categoryIds) {
@@ -200,7 +197,7 @@ class ObjectiveProvider with ChangeNotifier {
             repsForMastery: 1,
           ),
         );
-        // Revoke the full target contribution that was granted on completion.
+        // Undo target grant given on completion
         stat.count = math.max(0, stat.count - obj.targetAmount);
         stat.xp = math.max(0, stat.xp - xp);
 
@@ -218,12 +215,9 @@ class ObjectiveProvider with ChangeNotifier {
         }
       }
     } else {
-      // Toggle to COMPLETE — set amount to at least target, preserving overage.
+      // Toggle to COMPLETE — ensure at least target
       obj.isCompleted = true;
-      obj.completedAmount = math.max(
-        obj.completedAmount,
-        obj.targetAmount,
-      ); // ✅ keep over-target
+      obj.completedAmount = math.max(obj.completedAmount, obj.targetAmount);
       obj.completedOn = DateTime.now();
 
       for (final catId in obj.categoryIds) {
@@ -256,7 +250,7 @@ class ObjectiveProvider with ChangeNotifier {
             repsForMastery: 1,
           ),
         );
-        stat.count += obj.targetAmount; // grant for hitting target
+        stat.count += obj.targetAmount;
         stat.xp += xp;
 
         for (final skill in _skills.values) {
@@ -380,18 +374,14 @@ class ObjectiveProvider with ChangeNotifier {
           name: _categories[id]!.name,
           xp: _categories[id]!.xp,
           skills: _categories[id]!.skills,
-          colorInt: color.toARGB32(),
+          colorInt: color.value,
         );
         Future.microtask(() => _hiveService.saveCategories(_categories));
         notifyListeners();
       }
       return;
     }
-    _categories[id] = Category(
-      id: id,
-      name: nameOrId,
-      colorInt: color?.toARGB32(),
-    );
+    _categories[id] = Category(id: id, name: nameOrId, colorInt: color?.value);
     Future.microtask(() => _hiveService.saveCategories(_categories));
     notifyListeners();
   }
@@ -498,7 +488,7 @@ class ObjectiveProvider with ChangeNotifier {
   }
 
   List<Skill> getSkillsForCategory(String categoryId) {
-    return _skillsByCategory[categoryId] ?? [];
+    return _skillsByCategory[categoryId] ?? const <Skill>[];
   }
 
   void registerStat(Stat stat) {
@@ -653,7 +643,8 @@ class ObjectiveProvider with ChangeNotifier {
   List<Stat> getStatsForCategory(String categoryId) {
     final List<Stat> statsInCategory = [];
 
-    for (final skill in _skillsByCategory[categoryId] ?? []) {
+    final skills = _skillsByCategory[categoryId] ?? const <Skill>[];
+    for (final skill in skills) {
       statsInCategory.addAll(skill.stats);
     }
 
@@ -725,13 +716,10 @@ class ObjectiveProvider with ChangeNotifier {
   // ──────────────────────────── TALLY XP HELPERS ────────────────────────────
 
   double _pctForExtra(int i) {
-    // i is 1-based index of the extra tally over target
     final p = _tallyExtraStartPct - _tallyExtraStepPct * (i - 1);
     return p < _tallyExtraFloorPct ? _tallyExtraFloorPct : p;
   }
 
-  /// XP delta for changing tally from oldAmount → newAmount.
-  /// Full per-tally XP up to target; diminishing over target (50% → … → 10%).
   int _computeTallyXpDelta({
     required int oldAmount,
     required int newAmount,
@@ -747,7 +735,6 @@ class ObjectiveProvider with ChangeNotifier {
     int deltaXp = 0;
 
     if (newAmount > oldAmount) {
-      // Gains
       final int incWithin =
           (math.min(newAmount, target) - math.min(oldAmount, target)).toInt();
       deltaXp += incWithin * baseXpPerTally;
@@ -758,7 +745,6 @@ class ObjectiveProvider with ChangeNotifier {
         deltaXp += (baseXpPerTally * _pctForExtra(i)).round();
       }
     } else {
-      // Losses (undo)
       final int decWithin =
           (math.min(oldAmount, target) - math.min(newAmount, target)).toInt();
       deltaXp -= decWithin * baseXpPerTally;
@@ -772,7 +758,6 @@ class ObjectiveProvider with ChangeNotifier {
     return deltaXp;
   }
 
-  /// Apply XP (±) and unit count (±) across categories, stats, skills, history.
   void _applyTallyDelta({
     required Objective obj,
     required int xpDelta,
@@ -780,7 +765,7 @@ class ObjectiveProvider with ChangeNotifier {
   }) {
     if (xpDelta == 0 && unitDelta == 0) return;
 
-    // Categories: reuse helper (handles level ups & total level)
+    // Categories
     for (final catId in obj.categoryIds) {
       addXpToCategory(catId, xpDelta);
     }
@@ -860,7 +845,6 @@ class ObjectiveProvider with ChangeNotifier {
       final int unitDelta = finalAmount - oldAmount;
 
       if (unitDelta == 0) {
-        // Still update completion flags if needed
         final bool nowCompleted = finalAmount >= obj.targetAmount;
         obj.isCompleted = nowCompleted;
         obj.completedOn = nowCompleted
@@ -873,10 +857,8 @@ class ObjectiveProvider with ChangeNotifier {
         return;
       }
 
-      // Persist amount first
       obj.setCompletedAmount(normalized, finalAmount);
 
-      // Per-tally base: objective XP spread across target
       final int target = math.max(1, obj.targetAmount);
       final int baseXpPerTally = (obj.xpReward / target).round();
 
@@ -887,14 +869,12 @@ class ObjectiveProvider with ChangeNotifier {
         baseXpPerTally: baseXpPerTally,
       );
 
-      // Completion flags (no toggle to avoid double XP)
       final bool nowCompleted = finalAmount >= obj.targetAmount;
       obj.isCompleted = nowCompleted;
       obj.completedOn = nowCompleted
           ? (obj.completedOn ?? DateTime.now())
           : null;
 
-      // Apply XP + unit counts across categories/stats/skills
       _applyTallyDelta(obj: obj, xpDelta: xpDelta, unitDelta: unitDelta);
 
       evaluateLocks(normalized);
@@ -906,7 +886,6 @@ class ObjectiveProvider with ChangeNotifier {
     // ── ORIGINAL behavior for non-tally types ───────────────────────────────
     final wasCompleted = obj.isCompleted;
 
-    // ✅ allow over-target (only clamp at 0)
     final int finalAmount = math.max(0, newAmount);
     obj.setCompletedAmount(normalized, finalAmount);
 
@@ -932,8 +911,6 @@ class ObjectiveProvider with ChangeNotifier {
 
   // =================== DELETE APIs ===================
 
-  /// Delete a category and strip its reference from all objectives.
-  /// If an objective ends with an empty category list, UI will show "Uncategorized".
   Future<void> deleteCategory(String categoryId) async {
     if (!_categories.containsKey(categoryId)) return;
 
@@ -953,7 +930,6 @@ class ObjectiveProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  /// Remove a single dated instance of an objective.
   Future<bool> deleteObjectiveOnDate(DateTime date, String objectiveId) async {
     final normalized = _normalize(date);
     final list = _objectivesByDate[normalized];
@@ -974,7 +950,6 @@ class ObjectiveProvider with ChangeNotifier {
     return changed;
   }
 
-  /// Delete an objective everywhere (static and any dated copies).
   Future<int> deleteObjectiveEverywhere(String objectiveId) async {
     int removed = 0;
 
@@ -997,20 +972,16 @@ class ObjectiveProvider with ChangeNotifier {
     return removed;
   }
 
-  /// UI-facing deletion used by swipe & popup: deletes the objective everywhere.
   Future<void> deleteObjective(String objectiveId) async {
     await deleteObjectiveEverywhere(objectiveId);
   }
 
-  /// Delete a stat and prune it from skills, objectives, history & milestones.
   Future<bool> deleteStat(String statId) async {
     final existed = _stats.remove(statId) != null;
 
-    // Remove references on skills
     for (final skill in _skills.values) {
       skill.stats.removeWhere((s) => s.id == statId);
     }
-    // Remove references on objectives
     for (final o in _staticObjectives) {
       o.statIds.removeWhere((id) => id == statId);
     }
@@ -1019,7 +990,7 @@ class ObjectiveProvider with ChangeNotifier {
         o.statIds.removeWhere((id) => id == statId);
       }
     }
-    // History & milestones
+
     _statHistory.removeWhere((e) => e.statId == statId);
     _milestones.remove(statId);
 
@@ -1034,7 +1005,6 @@ class ObjectiveProvider with ChangeNotifier {
     return existed;
   }
 
-  /// Move objective (dated copy if present for [date], otherwise static copy).
   Future<void> moveObjectiveToCategory({
     required String objectiveId,
     required String newCategoryId,
@@ -1043,7 +1013,6 @@ class ObjectiveProvider with ChangeNotifier {
     ensureCategoryExists(newCategoryId);
     bool changed = false;
 
-    // Update the dated copy for the day if present
     if (date != null) {
       final normalized = _normalize(date);
       final list = _objectivesByDate[normalized];
@@ -1061,7 +1030,6 @@ class ObjectiveProvider with ChangeNotifier {
       }
     }
 
-    // Also update the static base copy if present
     final si = _staticObjectives.indexWhere((o) => o.id == objectiveId);
     if (si != -1) {
       final o = _staticObjectives[si];
@@ -1080,7 +1048,6 @@ class ObjectiveProvider with ChangeNotifier {
   }
 
   /// Reorder objectives within [categoryId] for a specific [date].
-  /// Rewrites order in the static list (subset active that weekday) and the dated list.
   Future<void> reorderObjectivesInCategoryForDate(
     DateTime date,
     String categoryId,
@@ -1098,17 +1065,14 @@ class ObjectiveProvider with ChangeNotifier {
       final mapById = {for (final o in subset) o.id: o};
       final reordered = <Objective>[];
 
-      // Place listed ids first in the provided order
       for (final id in orderedIds) {
         final o = mapById[id];
         if (o != null) reordered.add(o);
       }
-      // Then append any remaining (not explicitly ordered) in original order
       for (final o in subset) {
         if (!reordered.contains(o)) reordered.add(o);
       }
 
-      // Stitch back into original list positions for elements in the subset
       int ptr = 0;
       for (int i = 0; i < list.length; i++) {
         if (inSubset(list[i])) {
@@ -1117,25 +1081,22 @@ class ObjectiveProvider with ChangeNotifier {
       }
     }
 
-    // Static objectives subset for this weekday+category
+    // Static subset for this weekday & category (remove unnecessary parentheses)
     reorderSubset(
       _staticObjectives,
       (o) =>
-          (o.categoryIds.isNotEmpty
-              ? o.categoryIds.first == categoryId
-              : false) &&
+          o.categoryIds.isNotEmpty &&
+          o.categoryIds.first == categoryId &&
           o.isActiveOnWeekday(weekday),
     );
 
-    // Dated list subset
+    // Dated list subset (remove unnecessary parentheses)
     final normalized = _normalize(date);
     final dayList = _objectivesByDate[normalized];
     if (dayList != null) {
       reorderSubset(
         dayList,
-        (o) => (o.categoryIds.isNotEmpty
-            ? o.categoryIds.first == categoryId
-            : false),
+        (o) => o.categoryIds.isNotEmpty && o.categoryIds.first == categoryId,
       );
     }
 
@@ -1143,7 +1104,6 @@ class ObjectiveProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  /// Category ids observed on a date (first id on each objective, or 'Uncategorized').
   List<String> getCategoryIdsInUse(DateTime date) {
     final set = <String>{};
     for (final o in getObjectivesForDay(date)) {
@@ -1152,10 +1112,7 @@ class ObjectiveProvider with ChangeNotifier {
     return set.toList();
   }
 
-  /// Reorder top-level categories. Any category ids not included in [orderedIds]
-  /// keep their relative order and are appended after.
   Future<void> reorderCategories(List<String> orderedIds) async {
-    // Work on a snapshot to rebuild insertion order
     final snapshot = Map<String, Category>.from(_categories);
 
     final known = snapshot.keys.toSet();

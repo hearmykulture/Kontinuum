@@ -25,14 +25,21 @@ class _RecurringDialogState extends State<RecurringDialog> {
   @override
   void initState() {
     super.initState();
-    _nameCtrl = TextEditingController(text: widget.existing?['name'] ?? '');
-    _amountCtrl = TextEditingController(
-      text: (widget.existing != null && (widget.existing!['amount'] ?? 0) > 0)
-          ? (widget.existing!['amount']).toString()
-          : '',
-    );
-    _day = (widget.existing?['day'] as int?) ?? 1;
-    _categoryId = widget.existing?['categoryId'] as String?;
+
+    final existing = widget.existing;
+
+    final String initialName = (existing?['name'] as String?) ?? '';
+    final num? amtNum = existing?['amount'] is num
+        ? existing!['amount'] as num
+        : null;
+    final String initialAmtText = (amtNum != null && amtNum > 0)
+        ? amtNum.toString()
+        : '';
+
+    _nameCtrl = TextEditingController(text: initialName);
+    _amountCtrl = TextEditingController(text: initialAmtText);
+    _day = (existing?['day'] as int?) ?? 1;
+    _categoryId = existing?['categoryId'] as String?;
   }
 
   @override
@@ -84,7 +91,7 @@ class _RecurringDialogState extends State<RecurringDialog> {
                   dropdownColor: Colors.black,
                   items: List.generate(28, (i) => i + 1)
                       .map(
-                        (d) => DropdownMenuItem(
+                        (d) => DropdownMenuItem<int>(
                           value: d,
                           child: Text(
                             "$d",
@@ -108,8 +115,8 @@ class _RecurringDialogState extends State<RecurringDialog> {
                     "Unassigned",
                     style: TextStyle(color: Colors.white54),
                   ),
-                  items: [
-                    const DropdownMenuItem(
+                  items: <DropdownMenuItem<String?>>[
+                    const DropdownMenuItem<String?>(
                       value: null,
                       child: Text(
                         "Unassigned",
@@ -117,10 +124,10 @@ class _RecurringDialogState extends State<RecurringDialog> {
                       ),
                     ),
                     ...widget.categories.map(
-                      (c) => DropdownMenuItem(
-                        value: c['id'] as String,
+                      (c) => DropdownMenuItem<String?>(
+                        value: c['id'] as String?,
                         child: Text(
-                          c['name'] as String,
+                          (c['name'] as String?) ?? '',
                           style: const TextStyle(color: Colors.white70),
                         ),
                       ),
