@@ -9,6 +9,8 @@ on:
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -41,8 +43,9 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
+      # Make analyzer non-blocking (correct flags)
       - name: Analyze (non-blocking)
-        run: dart analyze --fatal-infos=false --fatal-warnings=false
+        run: dart analyze --no-fatal-infos --no-fatal-warnings
         continue-on-error: true
 
       - name: Unit & widget tests (with coverage)
