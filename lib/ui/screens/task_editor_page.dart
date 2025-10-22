@@ -1,38 +1,12 @@
 // lib/ui/screens/task_editor_page.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/foundation.dart'; // for ValueListenable/ValueNotifier
-import 'package:kontinuum/ui/widgets/task/task_options_panel.dart';
+import 'package:flutter/foundation.dart';
+import 'task_editor/models.dart';
+import 'task_editor/checklist.dart';
+import 'task_editor/panels_and_calendar.dart';
 
 const double _kBarH = 44;
-
-/// Returned to the caller when saving a task.
-class TaskEditorResult {
-  final String title;
-  final bool repeatOnCompletion;
-  final bool hasReminder;
-  final bool hasDeadline;
-  final List<ChecklistEntry> checklist;
-  final DateTime? date; // null => No Date / Someday
-  final bool someday; // explicit Someday flag (distinct from No Date)
-
-  const TaskEditorResult({
-    required this.title,
-    required this.repeatOnCompletion,
-    required this.hasReminder,
-    required this.hasDeadline,
-    required this.checklist,
-    required this.date,
-    required this.someday,
-  });
-}
-
-/// A single checklist entry (subtask).
-class ChecklistEntry {
-  final String text;
-  final bool done;
-  const ChecklistEntry({required this.text, required this.done});
-}
 
 /// Full-screen “Create Task” / “View Task” page (styled to match Add Event).
 class TaskEditorPage extends StatefulWidget {
@@ -42,8 +16,6 @@ class TaskEditorPage extends StatefulWidget {
     this.autofocusTitle = true,
     this.showDelete = false,
     this.onDelete,
-
-    /// Seed the editor when reopening an existing task
     this.initialOptions,
     this.initialChecklist,
   });
@@ -73,27 +45,23 @@ class _TaskEditorPageState extends State<TaskEditorPage> {
 
   // ----- Checklist state + animations -----
   final _listKey = GlobalKey<AnimatedListState>();
-  final List<_ChecklistItem> _items = <_ChecklistItem>[];
+  final List<ChecklistItemModel> _items = <ChecklistItemModel>[];
 
   void _addItem([String initial = '']) {
     final wasEmpty = _items.isEmpty;
     final index = _items.length;
-    final item = _ChecklistItem(initial);
+    final item = ChecklistItemModel(initial);
     _items.insert(index, item);
-    _listKey.currentState?.insertItem(
-      index,
-      duration: const Duration(milliseconds: 220),
-    );
+    _listKey.currentState
+        ?.insertItem(index, duration: const Duration(milliseconds: 220));
     if (wasEmpty) setState(() {}); // only rebuild when empty->nonempty
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => item.focusNode.requestFocus(),
-    );
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => item.focusNode.requestFocus());
   }
 
   void _toggleItem(int i) {
     if (i < 0 || i >= _items.length) return;
-    _items[i].done.value =
-        !_items[i].done.value; // row listens; no parent rebuild
+    _items[i].done.value = !_items[i].done.value; // row listens
   }
 
   void _removeItemAt(int index) {
@@ -102,7 +70,7 @@ class _TaskEditorPageState extends State<TaskEditorPage> {
     final removed = _items.removeAt(index);
     _listKey.currentState?.removeItem(
       index,
-      (context, animation) => _RemovedChecklistRow(
+      (context, animation) => RemovedChecklistRow(
         text: removed.controller.text,
         done: removed.done.value,
         animation: animation,
@@ -138,9 +106,8 @@ class _TaskEditorPageState extends State<TaskEditorPage> {
 
     final v = _opts.value;
 
-    final title = _titleCtrl.text.trim().isEmpty
-        ? 'Task'
-        : _titleCtrl.text.trim();
+    final title =
+        _titleCtrl.text.trim().isEmpty ? 'Task' : _titleCtrl.text.trim();
     final list = _items
         .map(
           (e) => ChecklistEntry(
@@ -162,6 +129,11 @@ class _TaskEditorPageState extends State<TaskEditorPage> {
         checklist: list,
         date: v.someday ? null : v.date,
         someday: v.someday,
+        // ✅ keep all selected stats
+        stats: List<StatPick>.from(v.stats),
+        // legacy mirrors for any older code paths
+        statId: v.statId,
+        statAmount: v.statAmount,
       ),
     );
   }
@@ -177,7 +149,7 @@ class _TaskEditorPageState extends State<TaskEditorPage> {
     }
     final initList = widget.initialChecklist ?? const <ChecklistEntry>[];
     for (final e in initList) {
-      final item = _ChecklistItem(e.text)..done.value = e.done;
+      final item = ChecklistItemModel(e.text)..done.value = e.done;
       _items.add(item);
     }
 
@@ -275,14 +247,14 @@ class _TaskEditorPageState extends State<TaskEditorPage> {
                       Positioned.fill(
                         top: contentTop,
                         child: ScrollConfiguration(
-                          behavior: const _NoGlow(),
+                          behavior: const NoGlowScrollBehavior(),
                           child: SingleChildScrollView(
                             padding: const EdgeInsets.fromLTRB(18, 0, 18, 24),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
                                 // Add item pill
-                                const _AddItemTile(),
+                                AddItemTile(onAdd: _addItem),
                                 const SizedBox(height: 12),
 
                                 // Subtasks list (AnimatedList)
@@ -298,9 +270,8 @@ class _TaskEditorPageState extends State<TaskEditorPage> {
                                     itemBuilder: (context, index, animation) {
                                       final item = _items[index];
                                       return Padding(
-                                        padding: const EdgeInsets.only(
-                                          bottom: 8,
-                                        ),
+                                        padding:
+                                            const EdgeInsets.only(bottom: 8),
                                         child: SizeTransition(
                                           sizeFactor: CurvedAnimation(
                                             parent: animation,
@@ -315,7 +286,7 @@ class _TaskEditorPageState extends State<TaskEditorPage> {
                                               return false;
                                             },
                                             background: const SizedBox.shrink(),
-                                            child: _ChecklistRow(
+                                            child: ChecklistRow(
                                               controller: item.controller,
                                               focusNode: item.focusNode,
                                               doneListenable: item.done,
@@ -336,7 +307,7 @@ class _TaskEditorPageState extends State<TaskEditorPage> {
 
                                 const SizedBox(height: 16),
 
-                                // Date / Reminder / Deadline panel
+                                // Date / Reminder / Deadline / Stat panel
                                 TaskOptionsPanel(controller: _opts),
                               ],
                             ),
@@ -365,10 +336,8 @@ class _TaskEditorPageState extends State<TaskEditorPage> {
                     behavior: HitTestBehavior.opaque,
                     onTap: _close,
                     child: const Padding(
-                      padding: EdgeInsets.symmetric(
-                        vertical: 10,
-                        horizontal: 4,
-                      ),
+                      padding:
+                          EdgeInsets.symmetric(vertical: 10, horizontal: 4),
                       child: Text(
                         'Cancel',
                         style: TextStyle(color: Colors.white, fontSize: 16),
@@ -380,10 +349,8 @@ class _TaskEditorPageState extends State<TaskEditorPage> {
                     behavior: HitTestBehavior.opaque,
                     onTap: _save,
                     child: const Padding(
-                      padding: EdgeInsets.symmetric(
-                        vertical: 10,
-                        horizontal: 4,
-                      ),
+                      padding:
+                          EdgeInsets.symmetric(vertical: 10, horizontal: 4),
                       child: Text(
                         'Done',
                         style: TextStyle(color: Colors.white, fontSize: 16),
@@ -439,264 +406,10 @@ class _CenteredTitleField extends StatelessWidget {
       onSubmitted: (_) => onDone(),
       onEditingComplete: onDone,
       onTapOutside: (_) => focusNode.requestFocus(),
-      // NOTE: not const — list contains non-const elements
       inputFormatters: [
         FilteringTextInputFormatter.singleLineFormatter,
         LengthLimitingTextInputFormatter(100),
       ],
-    );
-  }
-}
-
-// ===== Existing helpers (tweaked) =====
-
-class _AddItemTile extends StatelessWidget {
-  const _AddItemTile();
-
-  @override
-  Widget build(BuildContext context) {
-    final state = context.findAncestorStateOfType<_TaskEditorPageState>()!;
-    return _RoundedTile(
-      height: 48,
-      radius: 22,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(22),
-        onTap: () => state._addItem(),
-        child: Row(
-          children: const [
-            Icon(Icons.add_rounded, color: Colors.white, size: 22),
-            SizedBox(width: 10),
-            _AddItemLabel(),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _AddItemLabel extends StatelessWidget {
-  const _AddItemLabel();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Text(
-      'Add item',
-      style: TextStyle(
-        color: Colors.white,
-        fontSize: 16,
-        fontWeight: FontWeight.w600,
-      ),
-    );
-  }
-}
-
-class _ChecklistItem {
-  _ChecklistItem(String initial)
-    : controller = TextEditingController(text: initial),
-      key = UniqueKey();
-
-  final Key key;
-  final TextEditingController controller;
-  final FocusNode focusNode = FocusNode();
-  // Local row state; rows listen to this instead of parent setState
-  final ValueNotifier<bool> done = ValueNotifier<bool>(false);
-
-  void dispose() {
-    controller.dispose();
-    focusNode.dispose();
-    done.dispose();
-  }
-}
-
-class _ChecklistRow extends StatelessWidget {
-  const _ChecklistRow({
-    required this.controller,
-    required this.focusNode,
-    required this.doneListenable,
-    required this.onToggle,
-    required this.onSubmitted,
-    required this.onDelete,
-  });
-
-  final TextEditingController controller;
-  final FocusNode focusNode;
-  final ValueListenable<bool> doneListenable;
-  final VoidCallback onToggle;
-  final VoidCallback onDelete;
-  final void Function(bool isLastRow) onSubmitted;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 56,
-      decoration: BoxDecoration(
-        color: const Color(0xFF232323),
-        borderRadius: BorderRadius.circular(28),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Row(
-        children: [
-          InkWell(
-            onTap: onToggle,
-            customBorder: const CircleBorder(),
-            child: Padding(
-              padding: const EdgeInsets.all(6.0),
-              child: ValueListenableBuilder<bool>(
-                valueListenable: doneListenable,
-                builder: (_, done, __) => AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 140),
-                  switchInCurve: Curves.easeOutBack,
-                  switchOutCurve: Curves.easeIn,
-                  transitionBuilder: (child, anim) =>
-                      ScaleTransition(scale: anim, child: child),
-                  child: done
-                      ? const Icon(
-                          Icons.check_circle,
-                          key: ValueKey('on'),
-                          color: Colors.white,
-                          size: 22,
-                        )
-                      : const Icon(
-                          Icons.circle_outlined,
-                          key: ValueKey('off'),
-                          color: Colors.white,
-                          size: 22,
-                        ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              focusNode: focusNode,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
-              decoration: const InputDecoration(
-                hintText: 'Subtask',
-                hintStyle: TextStyle(color: Color(0x66FFFFFF)),
-                border: InputBorder.none,
-                isCollapsed: true,
-              ),
-              textInputAction: TextInputAction.next,
-              onSubmitted: (_) => onSubmitted(true),
-              // NOTE: not const — list contains non-const elements
-              inputFormatters: [
-                FilteringTextInputFormatter.singleLineFormatter,
-                LengthLimitingTextInputFormatter(80),
-              ],
-            ),
-          ),
-          InkWell(
-            onTap: onDelete,
-            borderRadius: BorderRadius.circular(14),
-            child: const Padding(
-              padding: EdgeInsets.all(6.0),
-              child: Icon(
-                Icons.close_rounded,
-                size: 18,
-                color: Color(0xCCFFFFFF),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _RemovedChecklistRow extends StatelessWidget {
-  const _RemovedChecklistRow({
-    required this.text,
-    required this.done,
-    required this.animation,
-  });
-
-  final String text;
-  final bool done;
-  final Animation<double> animation;
-
-  @override
-  Widget build(BuildContext context) {
-    final curved = CurvedAnimation(parent: animation, curve: Curves.easeInOut);
-    return SizeTransition(
-      sizeFactor: curved,
-      child: FadeTransition(
-        opacity: curved,
-        child: ScaleTransition(
-          scale: Tween<double>(begin: 1.0, end: 0.85).animate(curved),
-          child: Container(
-            height: 56,
-            decoration: BoxDecoration(
-              color: const Color(0xFF232323),
-              borderRadius: BorderRadius.circular(28),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Row(
-              children: const [
-                Padding(
-                  padding: EdgeInsets.all(6.0),
-                  child: Icon(
-                    Icons.circle_outlined,
-                    color: Colors.white,
-                    size: 22,
-                  ),
-                ),
-                SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    '',
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                SizedBox(width: 12),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// small utility: disable glow on iOS style scrolling
-class _NoGlow extends ScrollBehavior {
-  const _NoGlow();
-  @override
-  Widget buildOverscrollIndicator(
-    BuildContext context,
-    Widget child,
-    ScrollableDetails details,
-  ) {
-    return child; // no glow
-  }
-}
-
-class _RoundedTile extends StatelessWidget {
-  const _RoundedTile({required this.child, this.height = 56, this.radius = 28});
-  final Widget child;
-  final double height;
-  final double radius;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: height,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF232323),
-        borderRadius: BorderRadius.circular(radius),
-      ),
-      child: Align(alignment: Alignment.centerLeft, child: child),
     );
   }
 }

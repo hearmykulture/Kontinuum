@@ -1,15 +1,18 @@
+// ===================== YearTimeline.dart =====================
+import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:flutter/scheduler.dart' show SchedulerBinding;
 
 import 'package:kontinuum/ui/screens/day_detail_page.dart' as day;
+import 'package:kontinuum/ui/screens/task_editor_page.dart';
+import 'package:kontinuum/ui/screens/task_editor/models.dart'; // StatPick + TaskOptionsValue
 
 /* --- Shared spacing so reminders and tasks align exactly --- */
 const double _kAccentW = 12; // width of the accent slot (pill/checkbox)
 const double _kAccentH = 22; // height of the accent slot
 const double _kTextGap = 10; // gap between accent and text
 
-/// Public YearTimeline widget (previously _YearTimeline).
+/// Public YearTimeline widget.
 class YearTimeline extends StatefulWidget {
   const YearTimeline({
     super.key,
@@ -24,6 +27,7 @@ class YearTimeline extends StatefulWidget {
     required this.onPick,
     required this.onMonthOverlay, // (current, next, t)
     required this.railProgress, // 0..1 amount faded (1 = fully faded)
+    this.onTodayVisibilityChanged, // ← NEW
   });
 
   final int year;
@@ -36,8 +40,12 @@ class YearTimeline extends StatefulWidget {
   final Color laneColor;
   final ValueChanged<DateTime> onPick;
   final void Function(String currentLabel, String nextLabel, double t)
-  onMonthOverlay;
+      onMonthOverlay;
   final double railProgress;
+
+  /// Called whenever the visibility of **today** within the list changes.
+  /// `true` = some part of today’s row is visible; `false` = fully off-screen.
+  final ValueChanged<bool>? onTodayVisibilityChanged;
 
   @override
   YearTimelineState createState() => YearTimelineState();
@@ -76,19 +84,6 @@ class YearTimelineState extends State<YearTimeline> {
     return '${_spaced(mon)} ${_spaced(yr)}';
   }
 
-  /// SAME palette + hashing as ExtendedSidebarPanel so colors match exactly.
-  Color _markerFor(String seed) {
-    const palette = <Color>[
-      Color(0xFFB672FF), // purple
-      Color(0xFFFF5BAD), // magenta
-      Color(0xFF47C7FF), // blue
-      Color(0xFFB24D4D), // brick
-      Color(0xFF6E6E6E), // gray
-    ];
-    final idx = (seed.hashCode & 0x7fffffff) % palette.length;
-    return palette[idx];
-  }
-
   @override
   void initState() {
     super.initState();
@@ -101,7 +96,10 @@ class YearTimelineState extends State<YearTimeline> {
 
     _scroll.addListener(_handleScroll);
     _scheduleInitialScroll();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _emitOverlay());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _emitOverlay();
+      _updateTodayVisibilityAndNotify();
+    });
   }
 
   @override
@@ -119,6 +117,10 @@ class YearTimelineState extends State<YearTimeline> {
       _didInitialScroll = false;
       _scheduleInitialScroll();
     }
+    // Re-evaluate visibility if palette/layout inputs changed.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _updateTodayVisibilityAndNotify();
+    });
   }
 
   void _scheduleInitialScroll() {
@@ -128,6 +130,7 @@ class YearTimelineState extends State<YearTimeline> {
       await SchedulerBinding.instance.endOfFrame;
       if (!mounted) return;
       await scrollToDate(widget.selected);
+      _updateTodayVisibilityAndNotify();
     });
   }
 
@@ -143,7 +146,9 @@ class YearTimelineState extends State<YearTimeline> {
     _overlayScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _overlayScheduled = false;
-      if (mounted) _emitOverlay();
+      if (!mounted) return;
+      _emitOverlay();
+      _updateTodayVisibilityAndNotify();
     });
   }
 
@@ -195,6 +200,31 @@ class YearTimelineState extends State<YearTimeline> {
     widget.onMonthOverlay(curLabel, nextLabel, t);
   }
 
+  // ---------- Visibility helpers ----------
+  bool _isGlobalRectVisible(RenderBox childBox, RenderBox listBox) {
+    final Offset listTopLeft = listBox.localToGlobal(Offset.zero);
+    final Rect listRect = listTopLeft & listBox.size;
+
+    final Offset childTopLeft = childBox.localToGlobal(Offset.zero);
+    final Rect childRect = childTopLeft & childBox.size;
+
+    return childRect.overlaps(listRect);
+  }
+
+  void _updateTodayVisibilityAndNotify() {
+    final listCtx = _listKey.currentContext;
+    if (listCtx == null) return;
+    final listBox = listCtx.findRenderObject() as RenderBox?;
+    if (listBox == null || !listBox.attached) return;
+
+    final key = _dayKeys[_id(_today)];
+    final childBox = key?.currentContext?.findRenderObject() as RenderBox?;
+    // If we can't resolve the child yet, assume visible (prevents early flicker).
+    final visible =
+        (childBox == null) ? true : _isGlobalRectVisible(childBox, listBox);
+    widget.onTodayVisibilityChanged?.call(visible);
+  }
+
   void _notifyOverlayFor(DateTime date) {
     final label = _overlayLabelFor(DateTime(date.year, date.month, 1));
     widget.onMonthOverlay(label, label, 1.0);
@@ -227,10 +257,13 @@ class YearTimelineState extends State<YearTimeline> {
 
     _notifyOverlayFor(normalized);
     _emitOverlay();
+    _updateTodayVisibilityAndNotify();
   }
 
+  /// Public API: convenience wrapper to scroll to **today**.
+  Future<void> scrollToToday() => scrollToDate(_today);
+
   String? _chipTime(BuildContext context, day.Reminder r) {
-    // Keep TimeOfDay.format (locale-aware); only compute what's needed.
     if (r.start != null && r.end != null) {
       return '${r.start!.format(context)} \u2192 ${r.end!.format(context)}';
     } else if (r.start != null) {
@@ -245,11 +278,23 @@ class YearTimelineState extends State<YearTimeline> {
     return null;
   }
 
+  /// Build TaskOptionsValue for the editor **without** touching nonexistent getters.
+  TaskOptionsValue _optionsFromTask(day.Task t, DateTime dayDate) {
+    final List<StatPick> picks = List<StatPick>.from(t.stats);
+    return TaskOptionsValue(
+      date: dayDate,
+      someday: false,
+      repeatsDaily: t.repeatOnCompletion,
+      hasReminder: t.remindAt != null,
+      hasDeadline: t.due != null,
+      stats: picks,
+      statId: picks.isNotEmpty ? picks.first.id : null,
+      statAmount: picks.isNotEmpty ? picks.first.amount : 1,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    // NOTE: We still listen to the store at the list level; Flutter only
-    // builds visible items, so this is typically fine. If needed later,
-    // move chips into their own Listenable widgets keyed per day.
     return AnimatedBuilder(
       animation: day.DayPlanStore.I,
       builder: (_, __) {
@@ -257,9 +302,7 @@ class YearTimelineState extends State<YearTimeline> {
           key: _listKey,
           controller: _scroll,
           padding: EdgeInsets.zero,
-          // render a bit more offscreen to reduce jank while flinging
           cacheExtent: 1400,
-          // lower framework overhead
           addAutomaticKeepAlives: false,
           addRepaintBoundaries: true,
           addSemanticIndexes: false,
@@ -274,7 +317,7 @@ class YearTimelineState extends State<YearTimeline> {
             final dayKey = _dayKeys.putIfAbsent(_id(d), () => GlobalKey());
             if (d.day == 1) _monthKeys[d.month] = dayKey;
 
-            // ----- Reminders (existing) -----
+            // Reminders
             final reminders = day.DayPlanStore.I.reminders(d).toList()
               ..sort((a, b) {
                 final aMin = a.start == null
@@ -286,10 +329,10 @@ class YearTimelineState extends State<YearTimeline> {
                 return aMin.compareTo(bMin);
               });
 
-            // ----- Tasks (OPEN + DONE; open first) -----
+            // Tasks (OPEN + DONE; open first)
             final tasks = day.DayPlanStore.I.tasks(d).toList()
               ..sort((a, b) {
-                if (a.done != b.done) return a.done ? 1 : -1; // open first
+                if (a.done != b.done) return a.done ? 1 : -1;
                 final as = a.scheduledStart;
                 final bs = b.scheduledStart;
                 if (as != null && bs != null) return as.compareTo(bs);
@@ -301,16 +344,14 @@ class YearTimelineState extends State<YearTimeline> {
             const double chipSpacing = 2.0;
 
             final chips = <Widget>[
-              // Reminders → colored pills
               ...reminders.map((r) {
                 final t = _chipTime(context, r);
-                final color = _markerFor(r.title); // match Extended panel
+                final color = _markerFor(r.title);
                 return Padding(
                   padding: const EdgeInsets.only(bottom: chipSpacing),
                   child: _EventPill(title: r.title, time: t, dotColor: color),
                 );
               }),
-              // Tasks → compact checkbox rows (stay visible when completed)
               ...tasks.map((t) {
                 return Padding(
                   padding: const EdgeInsets.only(bottom: chipSpacing),
@@ -323,6 +364,21 @@ class YearTimelineState extends State<YearTimeline> {
                       t.id,
                       value,
                     ),
+                    onOpen: () {
+                      final opts = _optionsFromTask(
+                        t,
+                        DateTime(d.year, d.month, d.day),
+                      );
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => TaskEditorPage(
+                            initialTitle: t.title,
+                            autofocusTitle: false,
+                            initialOptions: opts,
+                          ),
+                        ),
+                      );
+                    },
                   ),
                 );
               }),
@@ -352,9 +408,21 @@ class YearTimelineState extends State<YearTimeline> {
       },
     );
   }
-}
 
-// ===== Row widgets (private to this file) =====
+  /// SAME palette + hashing as ExtendedSidebarPanel so colors match exactly.
+  Color _markerFor(String seed) {
+    const palette = <Color>[
+      Color(0xFFB672FF), // purple
+      Color(0xFFFF5BAD), // magenta
+      Color(0xFF47C7FF), // blue
+      Color(0xFFB24D4D), // brick
+      Color(0xFF6E6E6E), // gray
+    ];
+    final idx = (seed.hashCode & 0x7fffffff) % palette.length;
+    return palette[idx];
+  }
+}
+/* ================= Row + subwidgets ================= */
 
 class _DayRow extends StatelessWidget {
   const _DayRow({
@@ -387,12 +455,11 @@ class _DayRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Badge sizing; hug right edge of the black rail.
     const double badgeW = 48;
     const double badgeH = 64;
     const double badgeRightInset = 6;
+    const double _selLineWidth = 2.0;
 
-    // Precompute fade factor (1 - railProgress).
     final double f = (1.0 - railProgress).clamp(0.0, 1.0);
 
     return Material(
@@ -403,7 +470,6 @@ class _DayRow extends StatelessWidget {
           constraints: BoxConstraints(minHeight: rowMinH),
           child: Stack(
             children: [
-              // Backgrounds: black rail + lane
               Positioned.fill(
                 child: Row(
                   children: [
@@ -412,8 +478,19 @@ class _DayRow extends StatelessWidget {
                   ],
                 ),
               ),
-
-              // Date badge on the rail, aligned to the rail's right edge
+              if (isSelected)
+                Positioned(
+                  left: sidebarW - _selLineWidth,
+                  top: 0,
+                  bottom: 0,
+                  child: Container(
+                    width: _selLineWidth,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(_selLineWidth / 2),
+                    ),
+                  ),
+                ),
               Positioned(
                 left: sidebarW - badgeRightInset - badgeW,
                 top: 0,
@@ -421,27 +498,19 @@ class _DayRow extends StatelessWidget {
                 child: SizedBox(
                   width: badgeW,
                   child: Center(
-                    // Remove Opacity(saveLayer). Fade via color tints in badge.
                     child: _DateBadge(
                       day: day,
                       today: today,
                       width: badgeW,
                       height: badgeH,
                       isSelected: isSelected,
-                      weekdayColor: Color.fromRGBO(
-                        255,
-                        255,
-                        255,
-                        0.70 * f,
-                      ), // _muted * f
+                      weekdayColor: Color.fromRGBO(255, 255, 255, 0.70 * f),
                       railColor: railColor,
                       fade: f,
                     ),
                   ),
                 ),
               ),
-
-              // Right lane (chips)
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -481,7 +550,7 @@ class _DateBadge extends StatelessWidget {
   final DateTime today;
   final double width;
   final double height;
-  final bool isSelected; // selected or today outline
+  final bool isSelected; // no longer drives outline
   final Color weekdayColor;
   final Color railColor;
   final double fade;
@@ -502,9 +571,8 @@ class _DateBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dow = _dow[day.weekday - 1];
-    final showOutline = isSelected || _sameDay(day, today);
+    final bool showOutline = _sameDay(day, today);
 
-    // Apply fade by tinting colors (cheaper than Opacity layer)
     final Color outline = showOutline
         ? Color.fromRGBO(255, 255, 255, 1.0 * fade)
         : Colors.transparent;
@@ -621,21 +689,21 @@ class _EventPill extends StatelessWidget {
 }
 
 /// Compact task row with a **square** checkbox.
-/// When checked, we keep the task visible, fade it, and animate a strikethrough.
 class _TaskMiniChip extends StatefulWidget {
   const _TaskMiniChip({
     required this.title,
     required this.checked,
     required this.onToggle,
     this.time,
+    this.onOpen,
   });
 
   final String title;
   final bool checked;
   final String? time;
 
-  /// Called with the new value when toggled.
   final ValueChanged<bool> onToggle;
+  final VoidCallback? onOpen;
 
   @override
   State<_TaskMiniChip> createState() => _TaskMiniChipState();
@@ -653,14 +721,13 @@ class _TaskMiniChipState extends State<_TaskMiniChip>
   void initState() {
     super.initState();
     _checked = widget.checked;
-    _strikeCtrl =
-        AnimationController(
-          vsync: this,
-          duration: _strikeDur,
-          value: _checked ? 1.0 : 0.0,
-        )..addListener(() {
-          if (mounted) setState(() {});
-        });
+    _strikeCtrl = AnimationController(
+      vsync: this,
+      duration: _strikeDur,
+      value: _checked ? 1.0 : 0.0,
+    )..addListener(() {
+        if (mounted) setState(() {});
+      });
   }
 
   @override
@@ -708,7 +775,7 @@ class _TaskMiniChipState extends State<_TaskMiniChip>
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // Checkbox in the same accent slot as the reminder pill
+            // Checkbox (tap to toggle)
             GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: _toggle,
@@ -723,7 +790,7 @@ class _TaskMiniChipState extends State<_TaskMiniChip>
                     child: AnimatedContainer(
                       duration: _strikeDur,
                       curve: Curves.easeOut,
-                      width: _kAccentW, // slightly larger square
+                      width: _kAccentW,
                       height: _kAccentW,
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(3),
@@ -750,43 +817,36 @@ class _TaskMiniChipState extends State<_TaskMiniChip>
             ),
             const SizedBox(width: _kTextGap),
 
-            // Title + optional time (tap text to toggle as well)
+            // Title + optional time (tap = OPEN editor)
             Expanded(
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onTap: _toggle,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Title with animated strikethrough
-                    _StrikeTitle(
-                      text: widget.title,
-                      crossedProgress: strikeT,
-                      color: _checked ? mutedText : Colors.white,
-                    ),
-                    if (widget.time != null) ...[
-                      const SizedBox(height: 1.5),
-                      AnimatedDefaultTextStyle(
-                        duration: const Duration(milliseconds: 180),
-                        curve: Curves.easeOut,
-                        style: TextStyle(
-                          color: _checked ? mutedText : const Color(0xCCFFFFFF),
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          height: 1.05,
-                        ),
-                        child: Text(
-                          widget.time!,
-                          maxLines: 1,
-                          overflow: TextOverflow.fade,
-                        ),
-                      ),
-                    ],
-                  ],
+                onTap: widget.onOpen,
+                child: _StrikeTitle(
+                  text: widget.title,
+                  crossedProgress: strikeT,
+                  color: _checked ? mutedText : Colors.white,
                 ),
               ),
             ),
+            if (widget.time != null) ...[
+              const SizedBox(width: 8),
+              AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOut,
+                style: TextStyle(
+                  color: _checked ? mutedText : const Color(0xCCFFFFFF),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  height: 1.05,
+                ),
+                child: Text(
+                  widget.time!,
+                  maxLines: 1,
+                  overflow: TextOverflow.fade,
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -828,7 +888,6 @@ class _StrikeTitle extends StatelessWidget {
           ),
           child: Text(text, maxLines: 1, overflow: TextOverflow.ellipsis),
         ),
-        // Animated strikethrough that grows left -> right
         IgnorePointer(
           ignoring: true,
           child: LayoutBuilder(

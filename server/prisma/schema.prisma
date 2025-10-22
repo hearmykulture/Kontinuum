@@ -1,0 +1,90 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+model BankItem {
+  id          String   @id @default(cuid())
+  userId      String
+  plaidItemId String   @unique
+  institution String?
+  status      String   @default("active")
+  cursor      String?
+  paused      Boolean  @default(false)     // Phase 13
+  lastSyncAt  DateTime?                    // Phase 13
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  accounts BankAccount[]
+  secret   PlaidSecret?
+}
+
+model PlaidSecret {
+  id          String   @id @default(cuid())
+  itemId      String   @unique
+  accessToken String
+  createdAt   DateTime @default(now())
+
+  item BankItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+}
+
+model BankAccount {
+  id             String  @id @default(cuid())
+  itemId         String
+  plaidAccountId String  @unique
+  name           String?
+  mask           String?
+  subtype        String?
+  officialName   String?
+  currency       String?
+
+  item         BankItem          @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  transactions BankTransaction[]
+
+  @@index([itemId])
+}
+
+model BankTransaction {
+  id                   String    @id
+  accountId            String
+  isoCurrency          String?
+  amount               Decimal
+  authorizedDate       DateTime?
+  postedDate           DateTime?
+  pending              Boolean   @default(false)
+  name                 String?
+  merchantName         String?
+  categoryPath         String[]  @default([])
+  pendingTransactionId String?
+  raw                  Json?
+  removed              Boolean   @default(false)
+
+  account BankAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, postedDate])
+}
+
+model BudgetGoal {
+  id       String   @id @default(cuid())
+  userId   String
+  month    DateTime
+  category String
+  amount   Decimal
+
+  @@unique([userId, month, category], name: "userId_month_category")
+}
+
+model UserSettings {                   // Phase 13
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  bankSyncEnabled   Boolean  @default(true)
+  consentVersion    String?
+  consentAcceptedAt DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}

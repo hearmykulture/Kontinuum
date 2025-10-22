@@ -1,3 +1,4 @@
+// lib/utils/level_utils.dart
 import 'dart:math';
 
 class PrestigeTier {
@@ -10,11 +11,11 @@ class LevelUtils {
   static const int maxLevel = 100;
   static const double categoryA = 60.0;
 
-  /// === CATEGORY LEVELING (fixed curve) ===
-
+  // === CATEGORY LEVELING (fixed curve) ===
   static int getCategoryLevelFromXp(int xp) {
-    double level = sqrt(xp / categoryA);
-    return level.clamp(1, maxLevel).toInt();
+    final safeXp = max(0, xp);
+    final lvl = sqrt(safeXp / categoryA);
+    return lvl.clamp(1, maxLevel.toDouble()).toInt();
   }
 
   static int getXpForCategoryLevel(int level) {
@@ -23,35 +24,37 @@ class LevelUtils {
   }
 
   static int getTotalLevelFromXp(int totalXp, int numCategories) {
-    if (numCategories == 0) return 1;
-    final avgXp = totalXp ~/ numCategories;
+    if (numCategories <= 0) return 1;
+    final avgXp = max(0, totalXp) ~/ numCategories;
     return getCategoryLevelFromXp(avgXp);
   }
 
   static int getTotalXpForLevel(int level, int numCategories) {
-    if (numCategories == 0) return 0;
-    return (categoryA * pow(level.clamp(1, maxLevel), 2) * numCategories)
-        .toInt();
+    if (numCategories <= 0) return 0;
+    final clamped = level.clamp(1, maxLevel);
+    return (categoryA * pow(clamped, 2) * numCategories).toInt();
   }
 
-  /// === DYNAMIC LEVELING (for Skill and Stat) ===
-
+  // === DYNAMIC LEVELING (for Skill/Stat) ===
   static int getLevelFromXp(int xp, int maxXp) {
-    if (maxXp == 0) return 1;
-    final level = (xp / maxXp) * maxLevel;
-    return level.clamp(1, maxLevel).toInt();
+    if (maxXp <= 0) return 1; // guard
+    final lvl = (max(0, xp) / maxXp) * maxLevel;
+    return lvl.clamp(1, maxLevel.toDouble()).toInt();
   }
 
   static int getXpForLevel(int level, int maxXp) {
+    if (maxXp <= 0) return 0; // progress=0 case
     final clamped = level.clamp(1, maxLevel);
     return ((clamped / maxLevel) * maxXp).toInt();
   }
 
-  /// === PRESTIGE TITLES ===
-
+  // === PRESTIGE TITLES ===
   static PrestigeTier getPrestigeTitle(int level) {
-    final tier = level ~/ 10;
-    final roman = _romanNumeral(level % 10);
+    final safe = max(1, level);
+    final tier = safe ~/ 10; // 0..10
+    final digit = safe % 10; // 0..9
+    final roman = _romanNumeral(digit); // 0 => 'X' per spec
+
     switch (tier) {
       case 0:
         return const PrestigeTier("Rookie", "Gray");
@@ -73,7 +76,7 @@ class LevelUtils {
         return PrestigeTier("Opal $roman", "Gray");
       case 9:
         return PrestigeTier("Amethyst $roman", "Pink");
-      case 10:
+      case 10: // 100
         return const PrestigeTier("Rainbow Prestige", "Rainbow");
       default:
         return const PrestigeTier("??", "Black");
@@ -81,6 +84,8 @@ class LevelUtils {
   }
 
   static String _romanNumeral(int digit) {
+    // Multiples of 10 should display 'X'
+    if (digit == 0) return 'X';
     switch (digit) {
       case 1:
         return 'I';

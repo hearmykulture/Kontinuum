@@ -13,26 +13,59 @@ import 'package:kontinuum/data/stat_repository.dart';
 // For the Home button fallback when this screen isn't on its own route.
 import 'package:kontinuum/ui/screens/progress_screen.dart';
 
-const _kBankHeroTag = 'mission_bank_hero_tag';
+/// Helper compatible with older Dart: classic switch, no switch-expr.
+Color _rarityColor(MissionRarity r) {
+  switch (r) {
+    case MissionRarity.common:
+      return Colors.grey;
+    case MissionRarity.rare:
+      return Colors.cyanAccent;
+    case MissionRarity.legendary:
+      return Colors.deepPurpleAccent;
+  }
+}
 
 class MissionBoardScreen extends StatefulWidget {
-  const MissionBoardScreen({super.key});
+  const MissionBoardScreen({super.key, this.isActive = true});
+
+  /// When embedded inside a PageView, pass `isActive: pageIndex == boardIndex`
+  /// so the 1s timer is paused off-screen to avoid jank.
+  final bool isActive;
 
   @override
   State<MissionBoardScreen> createState() => _MissionBoardScreenState();
 }
 
-class _MissionBoardScreenState extends State<MissionBoardScreen> {
-  // Midnight reset
-  late Timer _timer;
+class _MissionBoardScreenState extends State<MissionBoardScreen>
+    with SingleTickerProviderStateMixin {
+  // Countdown text is isolated so only the title rebuilds every second.
+  final ValueNotifier<String> _countdownText =
+      ValueNotifier<String>('00:00:00');
+
+  Timer? _timer;
   Duration _timeUntilMidnight = Duration.zero;
   bool _didResetThisMidnight = false;
+
+  // Intro fade + scale (no slide)
+  late final AnimationController _introCtrl;
+  late final Animation<double> _fade;
+  late final Animation<double> _scale;
 
   @override
   void initState() {
     super.initState();
-    _updateTimeUntilMidnight();
 
+    // Longer, more dramatic entrance (no slide).
+    _introCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    );
+    _fade = CurvedAnimation(parent: _introCtrl, curve: Curves.easeOutCubic);
+    _scale = Tween<double>(begin: 0.98, end: 1.0).animate(
+      CurvedAnimation(parent: _introCtrl, curve: Curves.easeOutCubic),
+    );
+
+    // Warm the provider logic.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final missionProvider = context.read<MissionProvider>();
       final objectiveProvider = context.read<ObjectiveProvider>();
@@ -43,26 +76,67 @@ class _MissionBoardScreenState extends State<MissionBoardScreen> {
       await missionProvider.seedIfEmpty();
       await missionProvider.syncWithSeeder();
       missionProvider.ensureMissionSlotsFilled();
-    });
 
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) async {
-      if (!mounted) return;
+      // Slight delay so we definitely start "empty" before fading in.
+      Future.delayed(const Duration(milliseconds: 120), () {
+        if (mounted) _introCtrl.forward();
+      });
 
-      setState(_updateTimeUntilMidnight);
-
-      final provider = context.read<MissionProvider>();
-      if (!_didResetThisMidnight && _timeUntilMidnight.inSeconds <= 1) {
-        await provider.dailyReset();
-        _didResetThisMidnight = true;
-      } else if (_didResetThisMidnight &&
-          _timeUntilMidnight.inSeconds >= 86390) {
-        _didResetThisMidnight = false;
-      }
+      // Start/stop ticking based on visibility.
+      _ensureTimer(widget.isActive, initialKick: true);
     });
   }
 
+  @override
+  void didUpdateWidget(covariant MissionBoardScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isActive != widget.isActive) {
+      _ensureTimer(widget.isActive);
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _countdownText.dispose();
+    _introCtrl.dispose();
+    super.dispose();
+  }
+
+  // Start or stop the 1s timer; when (re)starting, tick immediately once.
+  void _ensureTimer(bool shouldRun, {bool initialKick = false}) {
+    if (!mounted) return;
+    if (shouldRun) {
+      _timer ??= Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+      if (initialKick || _countdownText.value == '00:00:00') {
+        _tick(); // update immediately so title is fresh
+      }
+    } else {
+      _timer?.cancel();
+      _timer = null;
+    }
+  }
+
+  void _tick() async {
+    if (!mounted || !widget.isActive) return;
+
+    _updateTimeUntilMidnight();
+
+    // Update only the small title subtree.
+    _countdownText.value = _formatDuration(_timeUntilMidnight);
+
+    // Midnight reset logic (kept here so it still runs while active).
+    final provider = context.read<MissionProvider>();
+    if (!_didResetThisMidnight && _timeUntilMidnight.inSeconds <= 1) {
+      await provider.dailyReset();
+      _didResetThisMidnight = true;
+    } else if (_didResetThisMidnight && _timeUntilMidnight.inSeconds >= 86390) {
+      _didResetThisMidnight = false;
+    }
+  }
+
   void _updateTimeUntilMidnight() {
-    // CST (UTC-5)
+    // CST (UTC-5) approximation
     final now = DateTime.now().toUtc().subtract(const Duration(hours: 5));
     final nextMidnight = DateTime(now.year, now.month, now.day + 1);
     _timeUntilMidnight = nextMidnight.difference(now);
@@ -75,17 +149,14 @@ class _MissionBoardScreenState extends State<MissionBoardScreen> {
     return "$h:$m:$s";
   }
 
-  @override
-  void dispose() {
-    _timer.cancel();
-    super.dispose();
-  }
-
-  // Keep this for other navigation paths that may still want a normal push.
+  // Open Mission Bank with NO transition.
   void _openBank({int initialTab = 0}) {
     Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => MissionBankScreen(initialTab: initialTab),
+      PageRouteBuilder<void>(
+        pageBuilder: (_, __, ___) => MissionBankScreen(initialTab: initialTab),
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
+        transitionsBuilder: (_, __, ___, child) => child,
       ),
     );
   }
@@ -97,7 +168,7 @@ class _MissionBoardScreenState extends State<MissionBoardScreen> {
     } else {
       // Fallback when this screen is embedded (e.g., inside a PageView)
       await nav.pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const ProgressScreen()),
+        MaterialPageRoute<void>(builder: (_) => const ProgressScreen()),
         (route) => false,
       );
     }
@@ -105,124 +176,85 @@ class _MissionBoardScreenState extends State<MissionBoardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return LevelUpWatcher(
-      child: Scaffold(
-        backgroundColor: Colors.black, // ← make board background pure black
-        appBar: AppBar(
-          backgroundColor: Colors.black,
-          centerTitle: true,
+    // We fade/scale in the whole Scaffold and ignore input until done.
+    return Stack(
+      children: [
+        Container(color: Colors.black), // stays black during 0-opacity
+        AnimatedBuilder(
+          animation: _introCtrl,
+          builder: (_, __) {
+            final absorbing = _introCtrl.value < 0.999;
+            return AbsorbPointer(
+              absorbing: absorbing,
+              child: FadeTransition(
+                opacity: _fade,
+                child: ScaleTransition(
+                  scale: _scale,
+                  child: LevelUpWatcher(
+                    child: Scaffold(
+                      backgroundColor: Colors.black, // board background
+                      appBar: AppBar(
+                        backgroundColor: Colors.black,
+                        centerTitle: true,
 
-          // ⬅️ Mission Bank (leading) — Hero expands into the Bank (All tab)
-          leading: const _BankHeroButton(),
+                        // ⬅️ Mission Bank (leading) — opens instantly (no animation)
+                        leading: _BankButton(
+                          onTap: () => _openBank(initialTab: 0),
+                        ),
 
-          // 🧭 Title
-          title: _HeaderTitle(countdown: _formatDuration(_timeUntilMidnight)),
+                        // 🧭 Title — only this tiny part rebuilds every second
+                        title:
+                            _HeaderTitle(countdownListenable: _countdownText),
 
-          // ➡️ Home (actions)
-          actions: [
-            IconButton(
-              tooltip: 'Back to Main',
-              icon: const Icon(Icons.home_outlined, color: Colors.white70),
-              onPressed: _goHome,
-            ),
-          ],
+                        // ➡️ Home (actions)
+                        actions: [
+                          IconButton(
+                            tooltip: 'Back to Main',
+                            icon: const Icon(Icons.home_outlined,
+                                color: Colors.white70),
+                            onPressed: _goHome,
+                          ),
+                        ],
+                      ),
+                      body: const SafeArea(
+                        top: false,
+                        left: false,
+                        right: false,
+                        bottom: true,
+                        child: _BoardPage(),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
         ),
-        body: const SafeArea(
-          top: false,
-          left: false,
-          right: false,
-          bottom: true,
-          child: _BoardPage(),
-        ),
-      ),
+      ],
     );
   }
 }
 
-class _BankHeroButton extends StatelessWidget {
-  const _BankHeroButton({super.key});
-
-  // The “flying” widget for the Hero. We fade this out near the end of the
-  // animation so the Mission Bank content can fade in underneath it.
-  static Widget _bankFlightShuttle(
-    BuildContext flightContext,
-    Animation<double> animation,
-    HeroFlightDirection direction,
-    BuildContext fromHeroContext,
-    BuildContext toHeroContext,
-  ) {
-    const bankBg = Color(0xFF0F0F1A);
-
-    // Fade the shuttle only at the *end* of push (and the *start* of pop).
-    final fade = direction == HeroFlightDirection.push
-        ? Tween<double>(begin: 1, end: 0).animate(
-            CurvedAnimation(
-              parent: animation,
-              curve: const Interval(0.75, 1.0, curve: Curves.easeOutCubic),
-            ),
-          )
-        : Tween<double>(begin: 0, end: 1).animate(
-            CurvedAnimation(
-              parent: animation,
-              curve: const Interval(0.0, 0.25, curve: Curves.easeInCubic),
-            ),
-          );
-
-    return FadeTransition(
-      opacity: fade,
-      child: const Material(
-        color: bankBg,
-        // Keep circular visual while small; it’ll scale to full-screen as the
-        // rect tween runs. (No shadow/elevation for a cleaner look.)
-        shape: CircleBorder(),
-      ),
-    );
-  }
+class _BankButton extends StatelessWidget {
+  const _BankButton({required this.onTap});
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    const bankBg = Color(0xFF0F0F1A); // Destination background
+    const bankBg = Color(0xFF0F0F1A); // Destination background styling
     return Padding(
       padding: const EdgeInsets.only(left: 4),
-      child: Hero(
-        tag: _kBankHeroTag,
-        createRectTween: (begin, end) =>
-            MaterialRectArcTween(begin: begin, end: end),
-        flightShuttleBuilder: _bankFlightShuttle,
-        child: Material(
-          color: bankBg,
-          shape: const CircleBorder(),
-          child: InkWell(
-            customBorder: const CircleBorder(),
-            onTap: () {
-              Navigator.of(context).push(
-                PageRouteBuilder(
-                  transitionDuration: const Duration(milliseconds: 460),
-                  reverseTransitionDuration: const Duration(milliseconds: 360),
-                  pageBuilder: (_, __, ___) =>
-                      const MissionBankScreen(initialTab: 0),
-                  // Delay the page’s opacity so it appears *under* the hero
-                  // shuttle right as the shuttle fades away.
-                  transitionsBuilder: (_, anim, __, child) => FadeTransition(
-                    opacity: CurvedAnimation(
-                      parent: anim,
-                      curve: const Interval(
-                        0.30,
-                        1.0,
-                        curve: Curves.easeOutCubic,
-                      ),
-                    ),
-                    child: child,
-                  ),
-                ),
-              );
-            },
-            child: const SizedBox(
-              width: 40,
-              height: 40,
-              // crate/locker icon reads as "bank/storage"
-              child: Icon(Icons.inventory_2_outlined, color: Colors.white70),
-            ),
+      child: Material(
+        color: bankBg,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: const SizedBox(
+            width: 40,
+            height: 40,
+            // crate/locker icon reads as "bank/storage"
+            child: Icon(Icons.inventory_2_outlined, color: Colors.white70),
           ),
         ),
       ),
@@ -231,41 +263,48 @@ class _BankHeroButton extends StatelessWidget {
 }
 
 class _HeaderTitle extends StatelessWidget {
-  const _HeaderTitle({required this.countdown});
-  final String countdown;
+  const _HeaderTitle({required this.countdownListenable});
+
+  // Use ValueNotifier directly to avoid needing the foundation import.
+  final ValueNotifier<String> countdownListenable;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const Text(
-          "Mission Board",
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontWeight: FontWeight.w700,
-            fontSize: 20,
-            color: Colors.white,
-            letterSpacing: 0.2,
-          ),
-        ),
-        const SizedBox(height: 2),
-        Row(
+    return ValueListenableBuilder<String>(
+      valueListenable: countdownListenable,
+      builder: (_, countdown, __) {
+        return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.schedule, size: 15, color: Colors.white60),
-            const SizedBox(width: 6),
-            Text(
-              "Resets in $countdown",
-              style: const TextStyle(
-                color: Colors.white60,
-                fontSize: 12,
+            const Text(
+              "Mission Board",
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 20,
+                color: Colors.white,
                 letterSpacing: 0.2,
               ),
             ),
+            const SizedBox(height: 2),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.schedule, size: 15, color: Colors.white60),
+                const SizedBox(width: 6),
+                Text(
+                  "Resets in $countdown",
+                  style: const TextStyle(
+                    color: Colors.white60,
+                    fontSize: 12,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+              ],
+            ),
           ],
-        ),
-      ],
+        );
+      },
     );
   }
 }
@@ -325,7 +364,7 @@ class _BoardPage extends StatelessWidget {
 
               final itemWidth =
                   (availableWidth - spacing * (crossAxisCount - 1)) /
-                  crossAxisCount;
+                      crossAxisCount;
               final itemHeight =
                   (availableHeight - spacing * (rows - 1)) / rows;
 
@@ -342,7 +381,10 @@ class _BoardPage extends StatelessWidget {
                   childAspectRatio: aspectRatio,
                 ),
                 itemBuilder: (context, index) {
-                  return MissionCard(mission: missions[index]);
+                  // Isolate each card’s paint work.
+                  return RepaintBoundary(
+                    child: MissionCard(mission: missions[index]),
+                  );
                 },
               );
             },
@@ -354,7 +396,7 @@ class _BoardPage extends StatelessWidget {
 }
 
 // =====================================================================
-// Mission Bank (in this file for convenience)
+// Mission Bank (kept in this file for convenience) — NO transition.
 // =====================================================================
 
 class MissionBankScreen extends StatelessWidget {
@@ -392,7 +434,8 @@ class MissionBankScreen extends StatelessWidget {
                   context: context,
                   builder: (_) => const _NewMissionDialog(),
                 );
-                if (created != null && context.mounted) {
+                if (!context.mounted) return;
+                if (created != null) {
                   context.read<MissionProvider>().addMission(created);
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Mission added')),
@@ -402,31 +445,10 @@ class MissionBankScreen extends StatelessWidget {
             ),
           ],
         ),
-        body: Stack(
-          children: const [
-            // Destination of the hero flight — full-screen bank background.
-            _BankHeroTarget(),
-            // Actual content on top.
-            TabBarView(children: [_AllMissionsTab(), _CompletedMissionsTab()]),
-          ],
+        // ⛔️ Removed Hero target/Stack; straight content.
+        body: const TabBarView(
+          children: [_AllMissionsTab(), _CompletedMissionsTab()],
         ),
-      ),
-    );
-  }
-}
-
-class _BankHeroTarget extends StatelessWidget {
-  const _BankHeroTarget({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    const bankBg = Color(0xFF0F0F1A);
-    return IgnorePointer(
-      child: Hero(
-        tag: _kBankHeroTag,
-        createRectTween: (begin, end) =>
-            MaterialRectArcTween(begin: begin, end: end),
-        child: const SizedBox.expand(child: ColoredBox(color: bankBg)),
       ),
     );
   }
@@ -518,12 +540,6 @@ class _AllMissionsTab extends StatelessWidget {
     );
   }
 
-  Color _rarityColor(MissionRarity r) => switch (r) {
-    MissionRarity.common => Colors.grey,
-    MissionRarity.rare => Colors.cyanAccent,
-    MissionRarity.legendary => Colors.deepPurpleAccent,
-  };
-
   Widget _chip(String label, {required Color border, required Color text}) {
     Color alpha(Color c, double o) => c.withAlpha((o * 255).round());
     return Container(
@@ -567,6 +583,7 @@ class _CompletedMissionsTab extends StatelessWidget {
               onPressed: () async {
                 await provider
                     .debugResetBoardNow(); // identical to midnight reset
+                if (!context.mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
                     content: Text('Debug: Simulated midnight reset'),
@@ -578,7 +595,8 @@ class _CompletedMissionsTab extends StatelessWidget {
               style: OutlinedButton.styleFrom(
                 foregroundColor: const Color(0xFF6C63FF),
                 side: BorderSide(
-                  color: const Color(0xFF6C63FF).withOpacity(0.6),
+                  // was withOpacity(0.6)
+                  color: const Color(0xFF6C63FF).withValues(alpha: 0.6),
                 ),
               ),
             ),
@@ -600,11 +618,7 @@ class _CompletedMissionsTab extends StatelessWidget {
                       const Divider(height: 1, color: Colors.white10),
                   itemBuilder: (_, i) {
                     final m = completed[i];
-                    final color = switch (m.rarity) {
-                      MissionRarity.common => Colors.grey,
-                      MissionRarity.rare => Colors.cyanAccent,
-                      MissionRarity.legendary => Colors.deepPurpleAccent,
-                    };
+                    final color = _rarityColor(m.rarity);
 
                     return ListTile(
                       contentPadding: const EdgeInsets.symmetric(horizontal: 8),
@@ -721,18 +735,20 @@ class _NewMissionDialogState extends State<_NewMissionDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final missionProvider = context.read<MissionProvider>();
     final objectiveProvider = context.read<ObjectiveProvider>();
 
     final categories = objectiveProvider.categories.values.toList()
-      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      ..sort(
+        (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+      );
 
     final statMetas = StatRepository.getAll().where(_validMeta).toList()
-      ..sort((a, b) => a.display.toString().compareTo(b.display.toString()));
+      ..sort(
+        (a, b) => a.display.toString().compareTo(b.display.toString()),
+      );
 
-    final previewId = (_idCtrl.text.isEmpty
-        ? _toIdSlug(_titleCtrl.text)
-        : _idCtrl.text);
+    final previewId =
+        (_idCtrl.text.isEmpty ? _toIdSlug(_titleCtrl.text) : _idCtrl.text);
 
     return AlertDialog(
       backgroundColor: const Color(0xFF1B1B23),
@@ -917,9 +933,8 @@ class _NewMissionDialogState extends State<_NewMissionDialog> {
             final mission = Mission(
               id: id,
               title: title,
-              description: _descCtrl.text.trim().isEmpty
-                  ? null
-                  : _descCtrl.text.trim(),
+              description:
+                  _descCtrl.text.trim().isEmpty ? null : _descCtrl.text.trim(),
               categoryIds: [_categoryId!],
               statIds: [_statId!],
               xpReward: xp,

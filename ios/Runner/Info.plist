@@ -28,6 +28,7 @@
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
+
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
@@ -41,12 +42,31 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 
-	<!-- ✅ Permissions for beat player -->
+	<!-- ✅ Plaid OAuth return -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>kontinuum</string>
+			</array>
+		</dict>
+	</array>
+
+	<!-- Dev only: allow http://localhost calls from iOS -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+
+	<!-- Permissions used by your app -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>This app uses the microphone to support audio features.</string>
 	<key>NSAppleMusicUsageDescription</key>

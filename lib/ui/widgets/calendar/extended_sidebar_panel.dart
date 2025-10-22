@@ -25,7 +25,7 @@ class ExtendedSidebarPanel extends StatelessWidget {
   final ValueChanged<DateTime> onPick;
 
   // Style tokens
-  static const _bg = Color(0xFF000000);
+  static const _bg = Color(0xFF000000); // ← exact #19212E
   static const _rose = Color(0xFFE54878); // header + outline tint
   static const _muted = Color(0x99FFFFFF);
 
@@ -166,10 +166,8 @@ class ExtendedSidebarPanel extends StatelessWidget {
         right: false,
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final double contentW = math.min(
-              constraints.maxWidth,
-              _maxContentW,
-            );
+            final double contentW =
+                math.min(constraints.maxWidth, _maxContentW);
 
             return Align(
               alignment: Alignment.topLeft,
@@ -190,58 +188,49 @@ class ExtendedSidebarPanel extends StatelessWidget {
                         splashFactory: NoSplash.splashFactory,
                         splashColor: Colors.transparent,
                         highlightColor: Colors.transparent,
-                        overlayColor: const MaterialStatePropertyAll(
-                          Colors.transparent,
-                        ),
+                        overlayColor:
+                            const MaterialStatePropertyAll(Colors.transparent),
                         onTap: () async {
                           final picked = await Navigator.of(context)
                               .push<YearOverviewResult>(
-                                PageRouteBuilder(
-                                  transitionDuration: const Duration(
-                                    milliseconds: 360,
-                                  ),
-                                  reverseTransitionDuration: const Duration(
-                                    milliseconds: 300,
-                                  ),
-                                  pageBuilder: (_, __, ___) => YearOverviewPage(
-                                    anchorDate: selected,
-                                    firstDate: firstDate,
-                                    lastDate: lastDate,
-                                    accent: const Color(0xFFB672FF),
-                                  ),
-                                  transitionsBuilder: (_, anim, sec, child) {
-                                    final curvedIn = CurvedAnimation(
-                                      parent: anim,
-                                      curve: Curves.easeOutCubic,
-                                    );
-                                    final curvedOut = CurvedAnimation(
-                                      parent: sec,
-                                      curve: Curves.easeOutCubic,
-                                    );
-                                    return SharedAxisTransition(
-                                      animation: curvedIn,
-                                      secondaryAnimation: curvedOut,
-                                      transitionType:
-                                          SharedAxisTransitionType.scaled,
-                                      fillColor: Colors.transparent,
-                                      child: child,
-                                    );
-                                  },
-                                ),
-                              );
+                            PageRouteBuilder(
+                              transitionDuration:
+                                  const Duration(milliseconds: 360),
+                              reverseTransitionDuration:
+                                  const Duration(milliseconds: 300),
+                              pageBuilder: (_, __, ___) => YearOverviewPage(
+                                anchorDate: selected,
+                                firstDate: firstDate,
+                                lastDate: lastDate,
+                                accent: const Color(0xFFB672FF),
+                              ),
+                              transitionsBuilder: (_, anim, sec, child) {
+                                final curvedIn = CurvedAnimation(
+                                  parent: anim,
+                                  curve: Curves.easeOutCubic,
+                                );
+                                final curvedOut = CurvedAnimation(
+                                  parent: sec,
+                                  curve: Curves.easeOutCubic,
+                                );
+                                return SharedAxisTransition(
+                                  animation: curvedIn,
+                                  secondaryAnimation: curvedOut,
+                                  transitionType:
+                                      SharedAxisTransitionType.scaled,
+                                  fillColor: Colors.transparent,
+                                  child: child,
+                                );
+                              },
+                            ),
+                          );
 
                           if (picked != null) {
                             final target = picked.monthOnly
                                 ? DateTime(
-                                    picked.date.year,
-                                    picked.date.month,
-                                    1,
-                                  )
-                                : DateTime(
-                                    picked.date.year,
-                                    picked.date.month,
-                                    picked.date.day,
-                                  );
+                                    picked.date.year, picked.date.month, 1)
+                                : DateTime(picked.date.year, picked.date.month,
+                                    picked.date.day);
                             onPick(target);
                           }
                         },
@@ -271,10 +260,8 @@ class ExtendedSidebarPanel extends StatelessWidget {
                         builder: (_, box) {
                           final totalSpacing = _gridSpacing * 6;
                           final double cell =
-                              ((box.maxWidth - totalSpacing) / 7).clamp(
-                                12.0,
-                                40.0,
-                              );
+                              ((box.maxWidth - totalSpacing) / 7)
+                                  .clamp(12.0, 40.0);
                           const labels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
                           return Row(
@@ -302,14 +289,10 @@ class ExtendedSidebarPanel extends StatelessWidget {
                         builder: (_, box) {
                           final totalSpacing = _gridSpacing * 6;
                           final double cellW =
-                              ((box.maxWidth - totalSpacing) / 7).clamp(
-                                20.0,
-                                44.0,
-                              );
-                          final double circle = math.min(
-                            _dayCircleMax,
-                            cellW - 2,
-                          );
+                              ((box.maxWidth - totalSpacing) / 7)
+                                  .clamp(20.0, 44.0);
+                          final double circle =
+                              math.min(_dayCircleMax, cellW - 2);
 
                           return GridView.builder(
                             itemCount: 42,
@@ -318,19 +301,18 @@ class ExtendedSidebarPanel extends StatelessWidget {
                             padding: EdgeInsets.zero,
                             gridDelegate:
                                 const SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: 7,
-                                  mainAxisSpacing: _gridSpacing,
-                                  crossAxisSpacing: _gridSpacing,
-                                  childAspectRatio: 1.0,
-                                ),
+                              crossAxisCount: 7,
+                              mainAxisSpacing: _gridSpacing,
+                              crossAxisSpacing: _gridSpacing,
+                              childAspectRatio: 1.0,
+                            ),
                             itemBuilder: (_, i) {
                               final d = grid[i];
                               final inMonth = d.month == monthAnchor.month;
                               final isToday = _sameDay(d, today);
                               final isSel = _sameDay(d, selected);
                               final enabled = _inRange(d);
-                              final hasItems =
-                                  hasItemsCache[_id(
+                              final hasItems = hasItemsCache[_id(
                                     DateTime(d.year, d.month, d.day),
                                   )] ??
                                   false;
@@ -351,20 +333,22 @@ class ExtendedSidebarPanel extends StatelessWidget {
                                 );
                               }
 
-                              final textColor = inMonth
-                                  ? Colors.white
-                                  : Colors.white38;
+                              final textColor =
+                                  inMonth ? Colors.white : Colors.white38;
 
                               return Opacity(
                                 opacity: enabled ? 1 : 0.35,
                                 child: InkWell(
-                                  borderRadius: BorderRadius.circular(
-                                    circle / 2,
-                                  ),
+                                  borderRadius:
+                                      BorderRadius.circular(circle / 2),
                                   onTap: enabled
                                       ? () => onPick(
-                                          DateTime(d.year, d.month, d.day),
-                                        )
+                                            DateTime(
+                                              d.year,
+                                              d.month,
+                                              d.day,
+                                            ),
+                                          )
                                       : null,
                                   child: Center(
                                     child: Container(
@@ -394,7 +378,7 @@ class ExtendedSidebarPanel extends StatelessWidget {
                       ),
                       const SizedBox(height: 16),
 
-                      // TODAY + add
+                      // TODAY label (button removed)
                       Row(
                         children: [
                           Flexible(
@@ -407,13 +391,6 @@ class ExtendedSidebarPanel extends StatelessWidget {
                               style: _todayAddStyle,
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          IconButton(
-                            visualDensity: VisualDensity.compact,
-                            tooltip: 'Add',
-                            onPressed: () => onPick(visibleDay),
-                            icon: const Icon(Icons.add, color: Colors.white),
-                          ),
                         ],
                       ),
                       const SizedBox(height: 6),
@@ -423,47 +400,40 @@ class ExtendedSidebarPanel extends StatelessWidget {
                         child: AnimatedBuilder(
                           animation: day.DayPlanStore.I,
                           builder: (_, __) {
-                            final agenda = day.DayPlanStore.I.agendaFor(
-                              visibleDay,
-                            );
+                            final agenda =
+                                day.DayPlanStore.I.agendaFor(visibleDay);
 
-                            final lines =
-                                <_AgendaLine>[
-                                  ...agenda.events.map((r) {
-                                    final startMin = (r.start == null)
-                                        ? null
-                                        : (r.start!.hour * 60 +
-                                              r.start!.minute);
-                                    return _AgendaLine(
-                                      title: r.title,
-                                      startMin: startMin,
-                                      isTask: false,
-                                    );
-                                  }),
-                                  ...agenda.scheduled.map((t) {
-                                    final s = t.scheduledStart!;
-                                    return _AgendaLine(
-                                      title: t.title,
-                                      startMin: s.hour * 60 + s.minute,
-                                      isTask: true,
-                                    );
-                                  }),
-                                  ...agenda.allDay.map(
-                                    (t) => _AgendaLine(
-                                      title: t.title,
-                                      startMin: null,
-                                      isTask: true,
-                                    ),
-                                  ),
-                                ]..sort((a, b) {
-                                  if (a.startMin == null &&
-                                      b.startMin == null) {
-                                    return 0;
-                                  }
-                                  if (a.startMin == null) return 1;
-                                  if (b.startMin == null) return -1;
-                                  return a.startMin!.compareTo(b.startMin!);
-                                });
+                            final lines = <_AgendaLine>[
+                              ...agenda.events.map((r) {
+                                final startMin = (r.start == null)
+                                    ? null
+                                    : (r.start!.hour * 60 + r.start!.minute);
+                                return _AgendaLine(
+                                  title: r.title,
+                                  startMin: startMin,
+                                  isTask: false,
+                                );
+                              }),
+                              ...agenda.scheduled.map((t) {
+                                final s = t.scheduledStart!;
+                                return _AgendaLine(
+                                  title: t.title,
+                                  startMin: s.hour * 60 + s.minute,
+                                  isTask: true,
+                                );
+                              }),
+                              ...agenda.allDay.map((t) => _AgendaLine(
+                                    title: t.title,
+                                    startMin: null,
+                                    isTask: true,
+                                  )),
+                            ]..sort((a, b) {
+                                if (a.startMin == null && b.startMin == null)
+                                  return 0;
+                                if (a.startMin == null) return 1;
+                                if (b.startMin == null) return -1;
+                                return a.startMin!.compareTo(b.startMin!);
+                              });
 
                             if (lines.isEmpty) {
                               return Padding(
@@ -487,10 +457,8 @@ class ExtendedSidebarPanel extends StatelessWidget {
                                   if (l.startMin == null) return 'ALL DAY';
                                   final h = (l.startMin! ~/ 60);
                                   final m = (l.startMin! % 60);
-                                  return TimeOfDay(
-                                    hour: h,
-                                    minute: m,
-                                  ).format(context);
+                                  return TimeOfDay(hour: h, minute: m)
+                                      .format(context);
                                 }();
 
                                 return InkWell(
@@ -510,9 +478,8 @@ class ExtendedSidebarPanel extends StatelessWidget {
                                           height: 18,
                                           decoration: BoxDecoration(
                                             color: color,
-                                            borderRadius: BorderRadius.circular(
-                                              3,
-                                            ),
+                                            borderRadius:
+                                                BorderRadius.circular(3),
                                           ),
                                         ),
                                         const SizedBox(width: 8),
@@ -531,8 +498,8 @@ class ExtendedSidebarPanel extends StatelessWidget {
                                                 Padding(
                                                   padding:
                                                       const EdgeInsets.only(
-                                                        top: 2,
-                                                      ),
+                                                    top: 2,
+                                                  ),
                                                   child: Text(
                                                     timeLabel,
                                                     maxLines: 1,

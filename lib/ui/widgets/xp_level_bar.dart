@@ -1,3 +1,4 @@
+// lib/ui/widgets/xp_level_bar.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // HapticFeedback
 import 'package:provider/provider.dart';
@@ -115,16 +116,15 @@ class _XpLevelBarState extends State<XpLevelBar> with TickerProviderStateMixin {
 
     // Animate XP count
     final delta = (toXp - fromXp).clamp(0, 100000);
-    final ms = (delta * 10).clamp(500, 1600);
+    final ms = (delta * 10).clamp(500, 1600).toInt(); // ensure int
     _xpAnim.duration = Duration(milliseconds: ms);
-    _xpTween =
-        IntTween(begin: fromXp, end: toXp).animate(
-          CurvedAnimation(parent: _xpAnim, curve: Curves.easeOutCubic),
-        )..addStatusListener((s) {
-          if (s == AnimationStatus.completed && mounted) {
-            setState(() => _xpTween = null);
-          }
-        });
+    _xpTween = IntTween(begin: fromXp, end: toXp).animate(
+      CurvedAnimation(parent: _xpAnim, curve: Curves.easeOutCubic),
+    )..addStatusListener((s) {
+        if (s == AnimationStatus.completed && mounted) {
+          setState(() => _xpTween = null);
+        }
+      });
 
     _xpAnim
       ..stop()
@@ -159,13 +159,14 @@ class _XpLevelBarState extends State<XpLevelBar> with TickerProviderStateMixin {
     }
   }
 
-  ({int level, double progress, int nextLevelXp}) _deriveFromXp(int xp) {
+  // ---------- Replaces the Dart record with a simple class ----------
+  _DerivedXp _deriveFromXp(int xp) {
     final lvl = LevelUtils.getCategoryLevelFromXp(xp);
     final low = LevelUtils.getXpForCategoryLevel(lvl);
     final next = LevelUtils.getXpForCategoryLevel(lvl + 1);
     final range = (next - low);
     final prog = range <= 0 ? 0.0 : ((xp - low) / range).clamp(0.0, 1.0);
-    return (level: lvl, progress: prog, nextLevelXp: next);
+    return _DerivedXp(level: lvl, progress: prog, nextLevelXp: next);
   }
 
   // Tap handlers to cycle categories
@@ -215,13 +216,13 @@ class _XpLevelBarState extends State<XpLevelBar> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    final provider = Provider.of<ObjectiveProvider>(context);
+    // ✅ Don’t subscribe the whole bar to provider changes.
+    final provider = context.read<ObjectiveProvider>();
     final categories = provider.categories.values.toList();
 
     // Guard against stale index if categories changed
-    final int safeIndex = (_viewIndex >= 0 && _viewIndex < categories.length)
-        ? _viewIndex
-        : -1;
+    final int safeIndex =
+        (_viewIndex >= 0 && _viewIndex < categories.length) ? _viewIndex : -1;
 
     // Live snapshot for label/color/xp
     String label = "TOTAL";
@@ -247,15 +248,12 @@ class _XpLevelBarState extends State<XpLevelBar> with TickerProviderStateMixin {
           padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 10.0),
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onVerticalDragStart: widget.onStatsPressed == null
-                ? null
-                : _onVerticalDragStart,
-            onVerticalDragUpdate: widget.onStatsPressed == null
-                ? null
-                : _onVerticalDragUpdate,
-            onVerticalDragEnd: widget.onStatsPressed == null
-                ? null
-                : _onVerticalDragEnd,
+            onVerticalDragStart:
+                widget.onStatsPressed == null ? null : _onVerticalDragStart,
+            onVerticalDragUpdate:
+                widget.onStatsPressed == null ? null : _onVerticalDragUpdate,
+            onVerticalDragEnd:
+                widget.onStatsPressed == null ? null : _onVerticalDragEnd,
             child: Material(
               color: Colors.transparent,
               borderRadius: BorderRadius.circular(12),
@@ -266,7 +264,8 @@ class _XpLevelBarState extends State<XpLevelBar> with TickerProviderStateMixin {
                 highlightColor: Colors.transparent,
                 hoverColor: Colors.transparent,
                 focusColor: Colors.transparent,
-                overlayColor: MaterialStateProperty.all(Colors.transparent),
+                overlayColor:
+                    WidgetStateProperty.all<Color>(Colors.transparent),
 
                 onTap: _cycleForward,
                 onLongPress: _resetToTotal,
@@ -376,7 +375,8 @@ class _BarContent extends StatelessWidget {
           const SizedBox(height: 3),
           Text(
             "$shownXp / $nextLevelXp XP",
-            style: TextStyle(fontSize: 12, color: color.withOpacity(0.75)),
+            style:
+                TextStyle(fontSize: 12, color: color.withValues(alpha: 0.75)),
           ),
           const SizedBox(height: 1),
         ],
@@ -402,7 +402,7 @@ class _StatsHeaderButton extends StatelessWidget {
         highlightColor: Colors.transparent,
         hoverColor: Colors.transparent,
         focusColor: Colors.transparent,
-        overlayColor: MaterialStateProperty.all(Colors.transparent),
+        overlayColor: WidgetStateProperty.all<Color>(Colors.transparent),
         child: SizedBox(
           width: 32,
           height: 26,
@@ -422,4 +422,16 @@ class _StatsHeaderButton extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Simple data holder to replace record usage.
+class _DerivedXp {
+  final int level;
+  final double progress;
+  final int nextLevelXp;
+  const _DerivedXp({
+    required this.level,
+    required this.progress,
+    required this.nextLevelXp,
+  });
 }

@@ -10,11 +10,7 @@ class BarBench extends StatelessWidget {
   /// Pass a callback that accepts 'entendre' or 'simile'.
   final void Function(String data)? onQuickInsert;
 
-  const BarBench({
-    super.key,
-    required this.body,
-    this.onQuickInsert,
-  });
+  const BarBench({super.key, required this.body, this.onQuickInsert});
 
   Widget _pill(String label) {
     return Material(

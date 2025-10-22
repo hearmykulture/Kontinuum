@@ -1,3 +1,5 @@
+// lib/providers/mission_provider.dart
+import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:hive/hive.dart';
@@ -5,21 +7,25 @@ import 'package:hive/hive.dart';
 import 'package:kontinuum/models/mission.dart';
 import 'package:kontinuum/providers/objective_provider.dart';
 import 'package:kontinuum/data/mission_seeder.dart';
+import 'package:kontinuum/data/hive_service.dart';
+import 'package:kontinuum/utils/date_keys.dart';
 
 class MissionProvider with ChangeNotifier {
   // ===== Config =====
   static const int _kVisibleSlots = 8;
-  static const String _boxName = 'activeMissionsBox';
-  static const String _metaBoxName = 'missionMetaBox';
 
-  // Rarity weights (used for random within a bucket, not global mix)
+  // Centralized box names
+  static const String _boxName = HiveService.activeMissionsBoxName;
+  static const String _metaBoxName = HiveService.missionMetaBoxName;
+
+  // Rarity weights (kept for future weighting tweaks)
   static const int _wtCommon = 65;
   static const int _wtRare = 28;
   static const int _wtLegendary = 7;
 
   // Suggested + board rarity policy
-  static const int _maxLegendarySuggested = 1;   // among the 2 “Suggested”
-  static const int _maxLegendaryOnBoard = 1;     // across all 8 visible
+  static const int _maxLegendarySuggested = 1; // among the 2 “Suggested”
+  static const int _maxLegendaryOnBoard = 1; // across all 8 visible
 
   // Quota plan for board fill (after suggested & accepted)
   static const int _quotaCommon = 6;
@@ -46,22 +52,37 @@ class MissionProvider with ChangeNotifier {
   Box<dynamic>? _metaBox;
 
   // meta (persisted)
-  List<String> _legendaryDaysYmd = [];              // days we showed a legendary
-  Map<String, String> _suggestedYmdById = {};       // missionId -> last suggested ymd
-  List<String> _completedYesterdayIds = [];         // what was completed before reset (for priority re-add)
+  List<String> _legendaryDaysYmd = []; // days we showed a legendary
+  Map<String, String> _suggestedYmdById = {}; // missionId -> last suggested ymd
+  List<String> _completedYesterdayIds = []; // completed before reset
+
+  // Debounced persistence
+  bool _persistQueued = false;
+  void _persistSoon() {
+    if (_persistQueued) return;
+    _persistQueued = true;
+    scheduleMicrotask(() async {
+      _persistQueued = false;
+      await _saveAll();
+      await _saveMeta();
+    });
+  }
 
   // ===== Wiring =====
   void attachObjectiveProvider(ObjectiveProvider provider) {
     _objectiveProvider = provider;
   }
 
+  bool exists(String id) => _byId.containsKey(id);
+
   Future<void> loadFromStorage() async {
-    _box = Hive.box<Mission>(_boxName);
-    if (!Hive.isBoxOpen(_metaBoxName)) {
-      _metaBox = await Hive.openBox(_metaBoxName);
-    } else {
-      _metaBox = Hive.box(_metaBoxName);
-    }
+    _box = Hive.isBoxOpen(_boxName)
+        ? Hive.box<Mission>(_boxName)
+        : await Hive.openBox<Mission>(_boxName);
+
+    _metaBox = Hive.isBoxOpen(_metaBoxName)
+        ? Hive.box(_metaBoxName)
+        : await Hive.openBox(_metaBoxName);
 
     if (_box!.isEmpty) {
       for (final m in MissionSeeder.seed()) {
@@ -75,18 +96,22 @@ class MissionProvider with ChangeNotifier {
     }
 
     // meta
-    final savedVisible = (_metaBox?.get('visibleIds') as List?)?.cast<String>() ?? [];
+    final savedVisible =
+        (_metaBox?.get('visibleIds') as List?)?.cast<String>() ?? [];
     _lastRollYmd = _metaBox?.get('lastRollYmd') as String?;
-    _legendaryDaysYmd = (_metaBox?.get('legendaryDaysYmd') as List?)?.cast<String>() ?? [];
-    _suggestedYmdById = Map<String, String>.from(_metaBox?.get('suggestedYmdById') as Map? ?? {});
-    _completedYesterdayIds = (_metaBox?.get('completedYesterdayIds') as List?)?.cast<String>() ?? [];
+    _legendaryDaysYmd =
+        (_metaBox?.get('legendaryDaysYmd') as List?)?.cast<String>() ?? [];
+    _suggestedYmdById = Map<String, String>.from(
+      _metaBox?.get('suggestedYmdById') as Map? ?? {},
+    );
+    _completedYesterdayIds =
+        (_metaBox?.get('completedYesterdayIds') as List?)?.cast<String>() ?? [];
 
     if (savedVisible.isNotEmpty) {
       final seen = <String>{};
       for (final id in savedVisible) {
-        if (_byId.containsKey(id) && !seen.contains(id)) {
+        if (_byId.containsKey(id) && seen.add(id)) {
           _visibleIds.add(id);
-          seen.add(id);
         }
       }
     }
@@ -97,8 +122,9 @@ class MissionProvider with ChangeNotifier {
     if (_visibleIds.isEmpty) {
       _rollDailySuggestionsIfNeeded(force: true);
       _topUpVisibleSlotsWithQuotas();
+      _recordLegendaryDayIfNeeded(_todayYmdLocal());
       await _saveMeta();
-      _persistLater();
+      _persistSoon();
     }
 
     ensureTwoSuggestedPresent();
@@ -120,7 +146,7 @@ class MissionProvider with ChangeNotifier {
       ensureTwoSuggestedPresent();
       _saveMeta();
     }
-    _persistLater();
+    _persistSoon();
     notifyListeners();
   }
 
@@ -155,7 +181,7 @@ class MissionProvider with ChangeNotifier {
       ensureTwoSuggestedPresent();
       _recordLegendaryDayIfNeeded(today);
       await _saveMeta();
-      _persistLater();
+      _persistSoon();
       notifyListeners();
       return;
     }
@@ -166,7 +192,7 @@ class MissionProvider with ChangeNotifier {
     if (_visibleIds.length != before) {
       _recordLegendaryDayIfNeeded(today);
       await _saveMeta();
-      _persistLater();
+      _persistSoon();
       notifyListeners();
     }
   }
@@ -189,7 +215,7 @@ class MissionProvider with ChangeNotifier {
     _topUpVisibleSlotsWithQuotas();
     ensureTwoSuggestedPresent();
     _recordLegendaryDayIfNeeded(_todayYmdLocal());
-    _persistLater();
+    _persistSoon();
     _saveMeta();
     notifyListeners();
   }
@@ -210,7 +236,7 @@ class MissionProvider with ChangeNotifier {
     if (m == null) return;
     m.isAccepted = true;
     ensureTwoSuggestedPresent();
-    _persistLater();
+    _persistSoon();
     notifyListeners();
   }
 
@@ -219,7 +245,7 @@ class MissionProvider with ChangeNotifier {
     if (m == null) return;
     m.isAccepted = false;
     ensureTwoSuggestedPresent();
-    _persistLater();
+    _persistSoon();
     notifyListeners();
   }
 
@@ -242,7 +268,7 @@ class MissionProvider with ChangeNotifier {
     _topUpVisibleSlotsWithQuotas();
     ensureTwoSuggestedPresent();
 
-    _persistLater();
+    _persistSoon();
     _saveMeta();
     notifyListeners();
   }
@@ -252,7 +278,7 @@ class MissionProvider with ChangeNotifier {
     if (m == null) return;
     m.isCompleted = false;
     ensureTwoSuggestedPresent();
-    _persistLater();
+    _persistSoon();
     notifyListeners();
   }
 
@@ -260,7 +286,7 @@ class MissionProvider with ChangeNotifier {
     _byId.remove(id);
     _visibleIds.remove(id);
     ensureTwoSuggestedPresent();
-    _persistLater();
+    _persistSoon();
     _saveMeta();
     notifyListeners();
   }
@@ -288,16 +314,14 @@ class MissionProvider with ChangeNotifier {
           final mm = _byId[vid];
           return mm == null || !mm.isAccepted;
         });
-        if (removeIndex == -1) {
-          removeIndex = _visibleIds.length - 1;
-        }
+        if (removeIndex == -1) removeIndex = _visibleIds.length - 1;
         _visibleIds.removeAt(removeIndex);
       }
       _visibleIds.insert(0, id);
     }
 
     ensureTwoSuggestedPresent();
-    _persistLater();
+    _persistSoon();
     _saveMeta();
     notifyListeners();
     return true;
@@ -312,29 +336,24 @@ class MissionProvider with ChangeNotifier {
     ensureTwoSuggestedPresent();
     _recordLegendaryDayIfNeeded(today);
     await _saveMeta();
-    _persistLater();
+    _persistSoon();
     notifyListeners();
   }
 
   /// 🧪 Debug: do the exact midnight-style reset **now** (same path).
   Future<void> debugResetBoardNow() async {
     final today = _todayYmdLocal();
-    _dailyReset(today);                // identical internals
+    _dailyReset(today); // identical internals
     _topUpVisibleSlotsWithQuotas();
     ensureTwoSuggestedPresent();
     _recordLegendaryDayIfNeeded(today);
     await _saveMeta();
-    _persistLater();
+    _persistSoon();
     notifyListeners();
   }
 
   // ===== Internals =====
-  String _todayYmdLocal() {
-    final now = DateTime.now().toLocal();
-    return '${now.year.toString().padLeft(4, '0')}-'
-           '${now.month.toString().padLeft(2, '0')}-'
-           '${now.day.toString().padLeft(2, '0')}';
-  }
+  String _todayYmdLocal() => DateKeys.ymd(DateTime.now());
 
   void _reseatRngFor(String ymd) {
     // Include pool size to avoid degenerate repeats when the pool changes.
@@ -376,9 +395,12 @@ class MissionProvider with ChangeNotifier {
   // --- rarity helpers / tie-breakers (XP ignored) ---
   int _rarityRank(MissionRarity r) {
     switch (r) {
-      case MissionRarity.legendary: return 3;
-      case MissionRarity.rare:      return 2;
-      case MissionRarity.common:    return 1;
+      case MissionRarity.legendary:
+        return 3;
+      case MissionRarity.rare:
+        return 2;
+      case MissionRarity.common:
+        return 1;
     }
   }
 
@@ -393,18 +415,28 @@ class MissionProvider with ChangeNotifier {
     return c;
   }
 
-  bool _withinLastNDays(String dayYmd, String todayYmd, int n) {
-    DateTime parse(String ymd) {
-      final p = ymd.split('-').map(int.parse).toList();
-      return DateTime(p[0], p[1], p[2]);
+  DateTime _parseYmdFlexible(String ymd) {
+    // Tolerate old 'yyyy-MM-ddTHH:mm...' if any linger in meta.
+    final s = ymd.length >= 10 ? ymd.substring(0, 10) : ymd;
+    try {
+      return DateKeys.fromYmd(s);
+    } catch (_) {
+      final dt = DateTime.tryParse(ymd) ?? DateTime.now();
+      return DateKeys.dateOnly(dt);
     }
-    final d = parse(dayYmd);
-    final t = parse(todayYmd);
-    return t.difference(d).inDays >= 0 && t.difference(d).inDays < n;
+  }
+
+  bool _withinLastNDays(String dayYmd, String todayYmd, int n) {
+    final d = _parseYmdFlexible(dayYmd);
+    final t = _parseYmdFlexible(todayYmd);
+    final delta = t.difference(d).inDays;
+    return delta >= 0 && delta < n;
   }
 
   bool _weeklyLegendaryQuotaOpen(String today) {
-    final recent = _legendaryDaysYmd.where((d) => _withinLastNDays(d, today, _legendaryWindowDays)).length;
+    final recent = _legendaryDaysYmd
+        .where((d) => _withinLastNDays(d, today, _legendaryWindowDays))
+        .length;
     return recent < _legendaryDaysCap;
   }
 
@@ -455,20 +487,23 @@ class MissionProvider with ChangeNotifier {
       return !_withinLastNDays(last, today, _suggestionCooldownDays + 1);
     }
 
-    // Sort by: weaker stats, cooled-down first, freshness (lower timesRecommended),
-    // lower rarity, category diversity hint, then alpha
-    String primaryCat(Mission m) => m.categoryIds.isNotEmpty ? m.categoryIds.first : '~';
+    // Sort by: weaker stats, cooled-down first, freshness, lower rarity,
+    // category alpha, then title alpha
+    String primaryCat(Mission m) =>
+        m.categoryIds.isNotEmpty ? m.categoryIds.first : '~';
     final sorted = List<Mission>.from(pool)
       ..sort((a, b) {
         final s = weakStatScore(a).compareTo(weakStatScore(b));
         if (s != 0) return s;
-        final cd = (isCooledDown(b) ? 1 : 0) - (isCooledDown(a) ? 1 : 0); // cooled first
+        final cd = (isCooledDown(b) ? 1 : 0) - (isCooledDown(a) ? 1 : 0);
         if (cd != 0) return cd;
         final fr = a.timesRecommended.compareTo(b.timesRecommended);
         if (fr != 0) return fr;
-        final rr = _rarityRank(a.rarity).compareTo(_rarityRank(b.rarity)); // lower rarity first
+        final rr = _rarityRank(a.rarity).compareTo(_rarityRank(b.rarity));
         if (rr != 0) return rr;
-        final cat = primaryCat(a).toLowerCase().compareTo(primaryCat(b).toLowerCase());
+        final cat = primaryCat(
+          a,
+        ).toLowerCase().compareTo(primaryCat(b).toLowerCase());
         if (cat != 0) return cat;
         return a.title.toLowerCase().compareTo(b.title.toLowerCase());
       });
@@ -483,13 +518,9 @@ class MissionProvider with ChangeNotifier {
         if (legPickCount >= _maxLegendarySuggested) return false;
         if (!weeklyOpen && !relaxLegendary) return false;
       }
-      // soft category spread: prefer new category if possible
+      // soft category spread
       final cat = primaryCat(m);
-      if (seenCats.contains(cat)) {
-        // allow only if we can't find a non-conflicting option later
-        // (we approximate by allowing in a 2nd pass if needed)
-        return false;
-      }
+      if (seenCats.contains(cat)) return false;
       return true;
     }
 
@@ -502,22 +533,22 @@ class MissionProvider with ChangeNotifier {
       if (_isLegendary(m)) legPickCount++;
     }
 
-    // Pass 2: relax category spread (still obey suggested cap, and weekly gate)
+    // Pass 2: relax category spread (still obey suggested cap & weekly gate)
     if (picks.length < 2) {
       for (final m in sorted) {
         if (picks.length == 2) break;
         if (picks.contains(m)) continue;
         if (_isLegendary(m)) {
           if (legPickCount >= _maxLegendarySuggested) continue;
-          if (!weeklyOpen) continue; // still respect weekly gate in pass 2
+          if (!weeklyOpen) continue;
         }
         picks.add(m);
         if (_isLegendary(m)) legPickCount++;
       }
     }
 
-    // Pass 3: as a last resort, if weekly gate blocked filling 2 and only legendaries exist,
-    // allow breaking weekly gate to reach 2 (keeps UX flowing when pool is tiny)
+    // Pass 3: last resort (tiny pools), allow legendary even if weekly gate closed,
+    // but still honor the per-day suggested cap.
     if (picks.length < 2) {
       for (final m in sorted.where(_isLegendary)) {
         if (picks.length == 2) break;
@@ -562,9 +593,16 @@ class MissionProvider with ChangeNotifier {
       return c;
     }
 
-    int needCommon = (_quotaCommon - countRarity(MissionRarity.common)).clamp(0, _kVisibleSlots);
-    int needRare   = (_quotaRare   - countRarity(MissionRarity.rare)).clamp(0, _kVisibleSlots);
-    int needLeg    = (_quotaLegendary - countRarity(MissionRarity.legendary)).clamp(0, _kVisibleSlots);
+    int needCommon = (_quotaCommon - countRarity(MissionRarity.common)).clamp(
+      0,
+      _kVisibleSlots,
+    );
+    int needRare = (_quotaRare - countRarity(MissionRarity.rare)).clamp(
+      0,
+      _kVisibleSlots,
+    );
+    int needLeg = (_quotaLegendary - countRarity(MissionRarity.legendary))
+        .clamp(0, _kVisibleSlots);
 
     // Fill common first (we favor approachable work)
     _fillBucket(MissionRarity.common, needCommon);
@@ -580,9 +618,8 @@ class MissionProvider with ChangeNotifier {
       _fillBucket(MissionRarity.legendary, needLeg);
     }
 
-    // If we’re still short (e.g., not enough rares/legs), backfill with lower rarity
+    // If we’re still short, backfill with lower rarity
     while (_visibleIds.length < _kVisibleSlots) {
-      // Prefer common → rare → (legendary only if all else fails AND caps allow)
       if (_fillBucket(MissionRarity.common, 1) == 1) continue;
       if (_fillBucket(MissionRarity.rare, 1) == 1) continue;
 
@@ -613,12 +650,10 @@ class MissionProvider with ChangeNotifier {
     // prioritize yesterday’s completed within the bucket
     final priorityIds = _completedYesterdayIds.toSet();
     final priority = eligible.where((m) => priorityIds.contains(m.id)).toList();
-    final others   = eligible.where((m) => !priorityIds.contains(m.id)).toList();
+    final others = eligible.where((m) => !priorityIds.contains(m.id)).toList();
 
     int added = 0;
 
-    // helper to pick one (weighted by per-mission rarity weight inside the bucket, but it’s constant per bucket;
-    // we’ll just use a stable shuffle by rng to keep determinism)
     Mission _pickOne(List<Mission> list) {
       list.shuffle(_rng);
       return list.first;
@@ -637,7 +672,7 @@ class MissionProvider with ChangeNotifier {
         break;
       }
 
-      // Legendary guard here as well (in case bucket == legendary)
+      // Legendary guard (when filling legendary bucket)
       if (rarity == MissionRarity.legendary) {
         final today = _todayYmdLocal();
         if (_legendaryCountOnBoard() >= _maxLegendaryOnBoard) break;
@@ -655,6 +690,8 @@ class MissionProvider with ChangeNotifier {
   /// Keep **exactly two** suggested missions present on the visible board.
   void ensureTwoSuggestedPresent() {
     final visible = getVisibleMissionSlots();
+    final today = _todayYmdLocal();
+    final weeklyOpen = _weeklyLegendaryQuotaOpen(today);
 
     final currentSuggested = visible
         .where((m) => m.recommendedBySmartSuggestion && !m.isCompleted)
@@ -702,45 +739,57 @@ class MissionProvider with ChangeNotifier {
     if (suggestedCount < 2) {
       final needed = 2 - suggestedCount;
 
-      // Prefer non-accepted, NON-legendary, fresh; then relax if needed.
-      final candidates = visible
-          .where((m) => !m.isCompleted && !m.recommendedBySmartSuggestion)
-          .toList()
-        ..sort((a, b) {
-          final aAcc = a.isAccepted ? 1 : 0; // prefer non-accepted
-          final bAcc = b.isAccepted ? 1 : 0;
-          if (aAcc != bAcc) return aAcc.compareTo(bAcc);
+      // Prefer non-accepted, NON-legendary (respect weekly gate), fresh.
+      final candidates =
+          visible
+              .where((m) => !m.isCompleted && !m.recommendedBySmartSuggestion)
+              .toList()
+            ..sort((a, b) {
+              final aAcc = a.isAccepted ? 1 : 0; // prefer non-accepted
+              final bAcc = b.isAccepted ? 1 : 0;
+              if (aAcc != bAcc) return aAcc.compareTo(bAcc);
 
-          final aLeg = _isLegendary(a) ? 1 : 0;
-          final bLeg = _isLegendary(b) ? 1 : 0;
-          if (aLeg != bLeg) return aLeg.compareTo(bLeg); // non-legendary first
+              final aLeg = _isLegendary(a) ? 1 : 0;
+              final bLeg = _isLegendary(b) ? 1 : 0;
+              if (aLeg != bLeg)
+                return aLeg.compareTo(bLeg); // non-legendary first
 
-          final fr = a.timesRecommended.compareTo(b.timesRecommended);
-          if (fr != 0) return fr;
-          final rr = _rarityRank(a.rarity).compareTo(_rarityRank(b.rarity));
-          if (rr != 0) return rr;
-          return a.title.toLowerCase().compareTo(b.title.toLowerCase());
-        });
+              final fr = a.timesRecommended.compareTo(b.timesRecommended);
+              if (fr != 0) return fr;
+              final rr = _rarityRank(a.rarity).compareTo(_rarityRank(b.rarity));
+              if (rr != 0) return rr;
+              return a.title.toLowerCase().compareTo(b.title.toLowerCase());
+            });
 
       int added = 0;
 
-      // Pass 1: respect legendary cap for suggested.
+      // Pass 1: respect legendary cap & weekly gate for suggested.
       for (final m in candidates) {
-        if (_isLegendary(m) && legCount >= _maxLegendarySuggested) continue;
+        if (_isLegendary(m) &&
+            (legCount >= _maxLegendarySuggested || !weeklyOpen)) {
+          continue;
+        }
         m.recommendedBySmartSuggestion = true;
         m.timesRecommended += 1;
-        legCount += _isLegendary(m) ? 1 : 0;
+        _suggestedYmdById[m.id] = today; // keep cooldown accurate
+        if (_isLegendary(m)) legCount++;
         added++;
         changed++;
         if (added == needed) break;
       }
 
-      // Pass 2: relax if still short (e.g., only legendaries available).
+      // Pass 2: relax (only if still short; still honor cap & weekly gate).
       if (added < needed) {
         for (final m in candidates) {
           if (m.recommendedBySmartSuggestion) continue;
+          if (_isLegendary(m) &&
+              (legCount >= _maxLegendarySuggested || !weeklyOpen)) {
+            continue;
+          }
           m.recommendedBySmartSuggestion = true;
           m.timesRecommended += 1;
+          _suggestedYmdById[m.id] = today;
+          if (_isLegendary(m)) legCount++;
           added++;
           changed++;
           if (added == needed) break;
@@ -749,7 +798,7 @@ class MissionProvider with ChangeNotifier {
     }
 
     if (changed > 0) {
-      _persistLater();
+      _persistSoon();
       notifyListeners();
     }
   }
@@ -758,9 +807,7 @@ class MissionProvider with ChangeNotifier {
   Future<void> _saveAll() async {
     if (_box == null) return;
     await _box!.clear();
-    for (final m in _byId.values) {
-      await _box!.put(m.id, m);
-    }
+    await _box!.putAll({for (final m in _byId.values) m.id: m});
   }
 
   Future<void> _saveMeta() async {
@@ -769,15 +816,17 @@ class MissionProvider with ChangeNotifier {
     if (_lastRollYmd != null) {
       await _metaBox!.put('lastRollYmd', _lastRollYmd);
     }
-    await _metaBox!.put('legendaryDaysYmd', List<String>.from(_legendaryDaysYmd));
-    await _metaBox!.put('suggestedYmdById', Map<String, String>.from(_suggestedYmdById));
-    await _metaBox!.put('completedYesterdayIds', List<String>.from(_completedYesterdayIds));
-  }
-
-  void _persistLater() {
-    Future.microtask(() async {
-      await _saveAll();
-      await _saveMeta();
-    });
+    await _metaBox!.put(
+      'legendaryDaysYmd',
+      List<String>.from(_legendaryDaysYmd),
+    );
+    await _metaBox!.put(
+      'suggestedYmdById',
+      Map<String, String>.from(_suggestedYmdById),
+    );
+    await _metaBox!.put(
+      'completedYesterdayIds',
+      List<String>.from(_completedYesterdayIds),
+    );
   }
 }

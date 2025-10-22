@@ -1,4 +1,6 @@
+// lib/models/objective.dart
 import 'package:hive/hive.dart';
+import 'package:kontinuum/utils/date_keys.dart';
 
 part 'objective.g.dart';
 
@@ -6,19 +8,14 @@ part 'objective.g.dart';
 enum ObjectiveType {
   @HiveField(0)
   standard,
-
   @HiveField(1)
   tally,
-
   @HiveField(2)
   writingPrompt,
-
   @HiveField(3)
   stopwatch,
-
   @HiveField(4)
   subtask,
-
   @HiveField(5)
   reflective,
 }
@@ -83,16 +80,14 @@ class Objective extends HiveObject {
   @HiveField(17)
   DateTime? completedOn;
 
-  /// Per-date progress for tally/stopwatch
+  /// Per-date progress for tally/stopwatch.
+  /// Keys are local 'yyyy-MM-dd' via DateKeys.ymd.
   @HiveField(18)
   Map<String, int> completedAmounts;
 
-  /// ────────────────────────────────────────────────────────────────────────────
-  /// NEW: Interval schedule (optional)
-  /// If set, the objective is active on dates where
-  /// (date - repeatAnchorDate).inDays % repeatEveryNDays == 0
-  /// You can use this alongside or instead of [activeDays].
-  /// ────────────────────────────────────────────────────────────────────────────
+  /// Interval schedule (optional).
+  /// If set, active on dates where
+  /// (date - repeatAnchorDate).inDays % repeatEveryNDays == 0.
   @HiveField(19)
   final int? repeatEveryNDays; // e.g. 2 = every other day
 
@@ -126,7 +121,8 @@ class Objective extends HiveObject {
   // Helpers
   bool isActiveOnWeekday(int weekday) => activeDays[weekday] == true;
 
-  String _dateKey(DateTime date) => date.toIso8601String().substring(0, 10);
+  // Centralized day key (local yyyy-MM-dd)
+  String _dateKey(DateTime date) => DateKeys.ymd(DateKeys.dateOnly(date));
 
   int getCompletedAmount(DateTime date) =>
       completedAmounts[_dateKey(date)] ?? 0;
@@ -144,18 +140,14 @@ class Objective extends HiveObject {
     return targetAmount == 0 ? 0 : (amount / targetAmount).clamp(0.0, 1.0);
   }
 
-  /// NEW: decides if this objective should appear on a given [date].
+  /// Decides if this objective should appear on a given [date].
   /// Priority:
   /// 1) If interval is configured → use interval rule.
   /// 2) else → fall back to weekday toggle map.
   bool isActiveOnDate(DateTime date) {
     if (repeatEveryNDays != null && repeatAnchorDate != null) {
-      final a = DateTime(
-        repeatAnchorDate!.year,
-        repeatAnchorDate!.month,
-        repeatAnchorDate!.day,
-      );
-      final d = DateTime(date.year, date.month, date.day);
+      final a = DateKeys.dateOnly(repeatAnchorDate!);
+      final d = DateKeys.dateOnly(date);
       final delta = d.difference(a).inDays;
       if (delta < 0) return false;
       return delta % repeatEveryNDays! == 0;

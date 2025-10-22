@@ -1,10 +1,16 @@
-// lib/ui/writing_editor/blocks/visuals/underline.dart
 import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import '../../core/editor_layout.dart';
 import 'entendre_visuals.dart';
+
+/// Geometry holder to replace the record return type.
+class UnderlineGeometry {
+  final double pillH;
+  final double contentTop;
+  const UnderlineGeometry({required this.pillH, required this.contentTop});
+}
 
 /// Single source of truth for the underline look & geometry under pills.
 /// Paint-only: no layout, no state.
@@ -45,6 +51,7 @@ class Underline {
     if (clipSize != null && !r.overlaps(Offset.zero & clipSize)) return;
 
     final paint = Paint()
+      // withOpacity() is deprecated; use withValues(alpha: 0..1)
       ..color = color.withValues(alpha: opacity)
       ..isAntiAlias = true;
 
@@ -61,7 +68,7 @@ class Underline {
   /// - [lineStride] is the baseline→baseline distance (`preferredLineHeight`).
   /// - [lineTop] should be the fragment’s top (local to the Editable area).
   /// - [insetTop]/[insetBottom]/[heightFactor]/[yNudge] mirror Entendre visuals.
-  ({double pillH, double contentTop}) geometryForLine({
+  UnderlineGeometry geometryForLine({
     required double lineStride,
     required double lineTop,
     double insetTop = EntendreVisuals.headInsetTop,
@@ -79,6 +86,6 @@ class Underline {
         insetTop + ((lineStride - insetTop - insetBottom) - pillH) / 2.0;
 
     final double contentTop = lineTop + bandTopOffset + yNudge;
-    return (pillH: pillH, contentTop: contentTop);
+    return UnderlineGeometry(pillH: pillH, contentTop: contentTop);
   }
 }

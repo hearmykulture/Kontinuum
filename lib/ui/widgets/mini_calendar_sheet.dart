@@ -1,3 +1,4 @@
+// lib/ui/widgets/mini_calendar_sheet.dart
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart'; // ValueNotifier / ValueListenable
@@ -32,7 +33,12 @@ class MiniCalendarSheet extends StatefulWidget {
     // Build a tiny center anchor so the popover animates nicely.
     Rect anchorRect;
     final overlay = Overlay.maybeOf(context, rootOverlay: true);
-    if (overlay?.context.findRenderObject() case final RenderBox box) {
+
+    // ↓↓↓ replace pattern-matching with a classic cast check
+    final ro = overlay?.context.findRenderObject();
+    final RenderBox? box = ro is RenderBox ? ro : null;
+
+    if (box != null) {
       final size = box.size;
       anchorRect = Rect.fromCenter(
         center: size.center(Offset.zero),
@@ -109,7 +115,7 @@ class _MiniCalendarSheetState extends State<MiniCalendarSheet> {
 
   // Reactive state (fine-grained rebuilds)
   late final ValueNotifier<DateTime>
-  _displayedMonthN; // normalized to first-of-month
+      _displayedMonthN; // normalized to first-of-month
   late final ValueNotifier<DateTime> _selectedN; // normalized to Y/M/D (00:00)
 
   // Cached current grid & labels for the visible month (recomputed only when month changes)
@@ -181,6 +187,7 @@ class _MiniCalendarSheetState extends State<MiniCalendarSheet> {
     final first = displayedMonthFirst; // 1st of month
     final leading = first.weekday % 7; // Sunday=0
     final daysThisMonth = DateTime(first.year, first.month + 1, 0).day;
+    // (daysThisMonth is unused in this grid-filler but kept for clarity)
 
     final cells = List<DateTime>.filled(42, first, growable: false);
     // Start date (Sunday before/at the 1st)
@@ -269,7 +276,7 @@ class _MiniCalendarSheetState extends State<MiniCalendarSheet> {
           // Fly the *child* of the Hero, not the Hero itself.
           final fromHero = fromCtx.widget as Hero;
           final toHero = toCtx.widget as Hero;
-          final shuttleChild = direction == HeroFlightDirection.push
+          final Widget shuttleChild = direction == HeroFlightDirection.push
               ? toHero.child
               : fromHero.child;
 
@@ -313,8 +320,7 @@ class _MiniCalendarSheetState extends State<MiniCalendarSheet> {
                             Text(
                               _monthLabel,
                               key: const ValueKey(
-                                'month',
-                              ), // minor text layout stability
+                                  'month'), // minor text layout stability
                               style: const TextStyle(
                                 color: _accent,
                                 fontSize: 20,
@@ -392,8 +398,8 @@ class _MiniCalendarSheetState extends State<MiniCalendarSheet> {
               LayoutBuilder(
                 builder: (_, box) {
                   // width of one cell (7 columns with 6 gaps)
-                  final double cell = ((box.maxWidth - _gridSpacing * 6) / 7)
-                      .clamp(28.0, 64.0);
+                  final double cell =
+                      ((box.maxWidth - _gridSpacing * 6) / 7).clamp(28.0, 64.0);
                   final double gridH = cell * 6 + _gridSpacing * 5;
                   final double pill = math.min(_pillSize, cell - 4);
 
@@ -412,17 +418,16 @@ class _MiniCalendarSheetState extends State<MiniCalendarSheet> {
                               final selectedDay = selected;
                               return GridView.builder(
                                 physics: const NeverScrollableScrollPhysics(),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 2,
-                                ),
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 2),
                                 itemCount: 42,
                                 gridDelegate:
                                     const SliverGridDelegateWithFixedCrossAxisCount(
-                                      crossAxisCount: 7,
-                                      crossAxisSpacing: _gridSpacing,
-                                      mainAxisSpacing: _gridSpacing,
-                                      childAspectRatio: 1.0,
-                                    ),
+                                  crossAxisCount: 7,
+                                  crossAxisSpacing: _gridSpacing,
+                                  mainAxisSpacing: _gridSpacing,
+                                  childAspectRatio: 1.0,
+                                ),
                                 itemBuilder: (_, i) {
                                   final day = _gridDays[i];
                                   final inDisplayedMonth = day.month == month;
@@ -430,24 +435,24 @@ class _MiniCalendarSheetState extends State<MiniCalendarSheet> {
                                   final isToday = _sameDay(day, today);
                                   final enabled = _inRange(day);
 
-                                  final fg = inDisplayedMonth
+                                  final Color fg = inDisplayedMonth
                                       ? _text
-                                      : _muted.withValues(alpha: 0.35);
+                                      : _muted.withOpacity(
+                                          0.35); // ↓↓ replaced .withValues
 
                                   BoxDecoration deco;
                                   if (isToday) {
                                     deco = BoxDecoration(
                                       shape: BoxShape.circle,
                                       color: _panel,
-                                      border: Border.all(
-                                        color: Colors.white,
-                                        width: 2.5,
+                                      border: const Border.fromBorderSide(
+                                        BorderSide(
+                                            color: Colors.white, width: 2.5),
                                       ),
                                       boxShadow: [
                                         BoxShadow(
-                                          color: Colors.white.withValues(
-                                            alpha: 0.06,
-                                          ),
+                                          color: Colors.white.withOpacity(0.06),
+                                          // ^ replaced .withValues(alpha: 0.06)
                                           blurRadius: 12,
                                         ),
                                       ],
@@ -469,9 +474,8 @@ class _MiniCalendarSheetState extends State<MiniCalendarSheet> {
                                   return Opacity(
                                     opacity: enabled ? 1 : 0.45,
                                     child: InkWell(
-                                      borderRadius: BorderRadius.circular(
-                                        pill / 2,
-                                      ),
+                                      borderRadius:
+                                          BorderRadius.circular(pill / 2),
                                       onTap: enabled
                                           ? () {
                                               final normalized = DateTime(
@@ -484,12 +488,11 @@ class _MiniCalendarSheetState extends State<MiniCalendarSheet> {
                                                 _selectedN.value,
                                               )) {
                                                 _selectedN.value =
-                                                    normalized; // local fine-grained update
+                                                    normalized; // local update
                                               }
                                               widget.onSelected(normalized);
-                                              Navigator.of(context).maybePop(
-                                                normalized,
-                                              ); // close popover route
+                                              Navigator.of(context)
+                                                  .maybePop(normalized);
                                             }
                                           : null,
                                       child: Center(
@@ -519,8 +522,7 @@ class _MiniCalendarSheetState extends State<MiniCalendarSheet> {
                         ),
                       ),
                       const SizedBox(
-                        height: 10,
-                      ), // cushion above rounded bottom
+                          height: 10), // cushion above rounded bottom
                     ],
                   );
                 },
@@ -538,14 +540,18 @@ class _WeekdayLabel extends StatelessWidget {
   final String text;
   @override
   Widget build(BuildContext context) => SizedBox(
-    width: _MiniCalendarSheetState._pillSize,
-    child: const Center(
-      child: Text(
-        '',
-        // This placeholder is replaced below; see RichText in build
-      ),
-    ),
-  );
+        width: _MiniCalendarSheetState._pillSize,
+        child: Center(
+          child: Text(
+            text, // actually use the provided label
+            style: const TextStyle(
+              color: _MiniCalendarSheetState._muted,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.2,
+            ),
+          ),
+        ),
+      );
 }
 
 /// Overlay host that positions & animates the popover.
@@ -598,14 +604,14 @@ class _AnchoredCalendarOverlayState extends State<_AnchoredCalendarOverlay>
         reverseCurve: Curves.easeInCubic,
       ),
     );
-    _slide = Tween<Offset>(begin: const Offset(0, -0.03), end: Offset.zero)
-        .animate(
-          CurvedAnimation(
-            parent: _ctrl,
-            curve: Curves.easeOut,
-            reverseCurve: Curves.easeIn,
-          ),
-        );
+    _slide =
+        Tween<Offset>(begin: const Offset(0, -0.03), end: Offset.zero).animate(
+      CurvedAnimation(
+        parent: _ctrl,
+        curve: Curves.easeOut,
+        reverseCurve: Curves.easeIn,
+      ),
+    );
 
     // play enter
     _ctrl.forward();

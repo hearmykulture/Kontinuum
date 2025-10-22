@@ -1,8 +1,22 @@
+// lib/ui/screens/day_detail_page.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
+
+import 'package:kontinuum/utils/date_keys.dart';
 import 'package:kontinuum/ui/screens/reminder_time_picker_page_v2.dart' as rtp;
+
+// Keep the page import for the UI
 import 'package:kontinuum/ui/screens/task_editor_page.dart' as tedit;
-import 'package:kontinuum/ui/widgets/task/task_options_panel.dart' as opts;
+// Import the editor value types separately (moved to models)
+import 'package:kontinuum/ui/screens/task_editor/models.dart' as tmodel;
+
+// XP UI + data
+import 'package:kontinuum/ui/widgets/xp_gain_bottom_bar.dart';
+import 'package:kontinuum/providers/objective_provider.dart';
+// ⬇️ used to map stat → category when awarding fallback XP
+import 'package:kontinuum/data/stat_repository.dart';
 
 /// --------------------------------------------------------------------------------
 /// Lightweight in-memory store (swap with Hive/DB later without touching the UI)
@@ -22,20 +36,24 @@ class DayPlanStore extends ChangeNotifier {
   List<Task> tasks(DateTime day) => List.unmodifiable(_get(day).tasks);
 
   /// --- Basic add (single slice) ---
-  void addReminder(DateTime day, Reminder r) {
+  void addReminder(DateTime day, Reminder r, {bool notify = true}) {
     _get(day).reminders.add(r);
-    notifyListeners();
+    if (notify) notifyListeners();
   }
 
-  /// --- Add a *series* (multi-day). One notify at the end. ---
+  /// --- Add a *series* (multi-day). One notify at the end by default. ---
   void addReminderSeries({
     required String groupId,
     required String title,
     required DateTime start,
     required DateTime end,
     required bool allDay,
+    bool notify = true,
   }) {
-    if (!end.isAfter(start)) end = start.add(const Duration(hours: 1));
+    // Ensure end is at or after start (local/naive).
+    if (!end.isAfter(start)) {
+      end = start.add(const Duration(hours: 1));
+    }
     final startDay = dateOnly(start);
     final endDay = dateOnly(end);
     final totalDays = endDay.difference(startDay).inDays;
@@ -70,7 +88,7 @@ class DayPlanStore extends ChangeNotifier {
       }
 
       final slice = Reminder(
-        id: UniqueKey().toString(),
+        id: genId(),
         groupId: groupId,
         title: title,
         start: segStart,
@@ -78,15 +96,15 @@ class DayPlanStore extends ChangeNotifier {
       );
       _get(d).reminders.add(slice);
     }
-    notifyListeners();
+    if (notify) notifyListeners();
   }
 
   /// Remove all slices that belong to a series.
-  void removeReminderGroup(String groupId) {
+  void removeReminderGroup(String groupId, {bool notify = true}) {
     for (final p in _byKey.values) {
       p.reminders.removeWhere((r) => r.groupId == groupId);
     }
-    notifyListeners();
+    if (notify) notifyListeners();
   }
 
   /// Convenience for edit: replace whole series with new definition.
@@ -97,19 +115,38 @@ class DayPlanStore extends ChangeNotifier {
     required DateTime end,
     required bool allDay,
   }) {
-    removeReminderGroup(groupId);
+    removeReminderGroup(groupId, notify: false);
     addReminderSeries(
       groupId: groupId,
       title: title,
       start: start,
       end: end,
       allDay: allDay,
+      notify: false,
     );
+    notifyListeners();
   }
 
-  void addTask(DateTime day, Task t) {
+  void addTask(DateTime day, Task t, {bool notify = true}) {
     _get(day).tasks.add(t);
-    notifyListeners();
+    if (notify) notifyListeners();
+  }
+
+  /// Move a task to another day while preserving its ID.
+  void moveTask(
+    DateTime fromDay,
+    String id,
+    DateTime toDay, {
+    Task? replaceWith,
+    bool notify = true,
+  }) {
+    final src = _get(fromDay).tasks;
+    final i = src.indexWhere((t) => t.id == id);
+    if (i == -1) return;
+    final moving = replaceWith ?? src[i];
+    src.removeAt(i);
+    _get(toDay).tasks.add(moving);
+    if (notify) notifyListeners();
   }
 
   // Stable-ish id generator for in-memory use (swap for uuid when persisted)
@@ -120,30 +157,33 @@ class DayPlanStore extends ChangeNotifier {
     final list = _get(day).tasks;
     final i = list.indexWhere((t) => t.id == id);
     if (i == -1) return;
+
     final cur = list[i];
+    // Update the task in-place
     list[i] = cur.copyWith(
       done: value,
       completedAt: value ? DateTime.now() : null,
-      // optional: clear remindAt when completed
-      // remindAt: value ? null : cur.remindAt,
     );
-    // Repeat-on-completion: spawn a clone for the next day
+
+    // NOTE: reward is triggered by UI fallback if needed
+
+    // Repeat-on-completion: spawn a clone for the next day (no intermediate notify)
     if (value && cur.repeatOnCompletion) {
       final nextDay = dateOnly(day).add(const Duration(days: 1));
-      addTask(
-        nextDay,
-        cur.copyWith(
-          id: genId(),
-          done: false,
-          completedAt: null,
-          scheduledStart: cur.scheduledStart?.add(const Duration(days: 1)),
-          scheduledEnd: cur.scheduledEnd?.add(const Duration(days: 1)),
-          checklist: cur.checklist
-              .map((c) => TaskChecklistEntry(text: c.text, done: false))
-              .toList(),
-        ),
+      final clone = cur.copyWith(
+        id: genId(),
+        done: false,
+        completedAt: null,
+        scheduledStart: cur.scheduledStart?.add(const Duration(days: 1)),
+        scheduledEnd: cur.scheduledEnd?.add(const Duration(days: 1)),
+        checklist: cur.checklist
+            .map((c) => TaskChecklistEntry(text: c.text, done: false))
+            .toList(),
       );
+      addTask(nextDay, clone, notify: false);
     }
+
+    // Single notify for the whole toggle operation
     notifyListeners();
   }
 
@@ -178,6 +218,31 @@ class DayPlanStore extends ChangeNotifier {
     }
   }
 
+  /// Helpers for series management/inspection
+  List<Reminder> remindersInGroup(String groupId) {
+    final out = <Reminder>[];
+    for (final p in _byKey.values) {
+      out.addAll(p.reminders.where((r) => r.groupId == groupId));
+    }
+    return out;
+  }
+
+  /// Returns the inclusive span of a reminder series across days.
+  DateTimeRange? seriesSpan(String groupId) {
+    DateTime? start;
+    DateTime? end;
+    for (final p in _byKey.values) {
+      final any = p.reminders.any((r) => r.groupId == groupId);
+      if (any) {
+        start =
+            (start == null) ? p.day : (p.day.isBefore(start!) ? p.day : start);
+        end = (end == null) ? p.day : (p.day.isAfter(end!) ? p.day : end);
+      }
+    }
+    if (start == null || end == null) return null;
+    return DateTimeRange(start: start!, end: end!);
+  }
+
   // ----- Derived views -----
   DaySummary summary(DateTime day) {
     final d = dateOnly(day);
@@ -201,39 +266,36 @@ class DayPlanStore extends ChangeNotifier {
     final rem = reminders(d);
     final ts = tasks(d);
 
-    final scheduled =
-        ts
-            .where(
-              (t) =>
-                  !t.done &&
-                  t.scheduledStart != null &&
-                  dateOnly(t.scheduledStart!) == d,
-            )
-            .toList()
-          ..sort((a, b) => a.scheduledStart!.compareTo(b.scheduledStart!));
+    final scheduled = ts
+        .where(
+          (t) =>
+              !t.done &&
+              t.scheduledStart != null &&
+              dateOnly(t.scheduledStart!) == d,
+        )
+        .toList()
+      ..sort((a, b) => a.scheduledStart!.compareTo(b.scheduledStart!));
 
     final allDay = ts.where((t) => !t.done && t.scheduledStart == null).toList()
       ..sort((a, b) => (b.priority).compareTo(a.priority));
 
-    final overdue =
-        ts
-            .where(
-              (t) => !t.done && t.due != null && dateOnly(t.due!).isBefore(d),
-            )
-            .toList()
-          ..sort((a, b) => (b.priority).compareTo(a.priority));
+    final overdue = ts
+        .where(
+          (t) => !t.done && t.due != null && dateOnly(t.due!).isBefore(d),
+        )
+        .toList()
+      ..sort((a, b) => (b.priority).compareTo(a.priority));
 
-    final unscheduled =
-        ts
-            .where(
-              (t) =>
-                  !t.done &&
-                  t.due != null &&
-                  !dateOnly(t.due!).isBefore(d) &&
-                  t.scheduledStart == null,
-            )
-            .toList()
-          ..sort((a, b) => (b.priority).compareTo(a.priority));
+    final unscheduled = ts
+        .where(
+          (t) =>
+              !t.done &&
+              t.due != null &&
+              !dateOnly(t.due!).isBefore(d) &&
+              t.scheduledStart == null,
+        )
+        .toList()
+      ..sort((a, b) => (b.priority).compareTo(a.priority));
 
     return AgendaView(
       events: rem,
@@ -244,8 +306,9 @@ class DayPlanStore extends ChangeNotifier {
     );
   }
 
-  static String _k(DateTime d) => DateFormat('yyyy-MM-dd').format(dateOnly(d));
-  static DateTime dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+  // Keying now uses centralized DateKeys (local yyyy-MM-dd)
+  static String _k(DateTime d) => DateKeys.ymd(dateOnly(d));
+  static DateTime dateOnly(DateTime d) => DateKeys.dateOnly(d);
 }
 
 class _DayPlan {
@@ -292,6 +355,7 @@ class Task {
     this.priority = 0,
     this.projectId,
     this.completedAt,
+    this.stats = const <tmodel.StatPick>[], // ✅ multi-stat payload
   });
 
   final String id;
@@ -307,6 +371,9 @@ class Task {
   final String? projectId;
   final DateTime? completedAt;
 
+  /// New: selected stat rewards for this task (can be empty).
+  final List<tmodel.StatPick> stats;
+
   Task copyWith({
     String? id,
     String? title,
@@ -320,6 +387,7 @@ class Task {
     int? priority,
     String? projectId,
     DateTime? completedAt,
+    List<tmodel.StatPick>? stats, // ✅ copyWith support
   }) {
     return Task(
       id: id ?? this.id,
@@ -334,6 +402,7 @@ class Task {
       priority: priority ?? this.priority,
       projectId: projectId ?? this.projectId,
       completedAt: completedAt ?? this.completedAt,
+      stats: stats ?? this.stats,
     );
   }
 }
@@ -398,9 +467,9 @@ class _DayDetailPageState extends State<DayDetailPage> {
   DateTime get _dayOnly => DayPlanStore.dateOnly(widget.day);
 
   Future<void> _openReminder(Reminder r) async {
-    await Navigator.push(
+    await Navigator.push<void>(
       context,
-      MaterialPageRoute(
+      MaterialPageRoute<void>(
         fullscreenDialog: true,
         builder: (_) => rtp.EmptyReminderTimePage(
           day: _dayOnly,
@@ -415,21 +484,23 @@ class _DayDetailPageState extends State<DayDetailPage> {
   Future<void> _openTask(Task t) async {
     // Build initial options for the editor from the existing task
     final DateTime? initialDate = t.due ?? t.scheduledStart ?? t.remindAt;
-    final initialOptions = opts.TaskOptionsValue(
+    final tmodel.TaskOptionsValue initialOptions = tmodel.TaskOptionsValue(
       date: initialDate == null ? null : DayPlanStore.dateOnly(initialDate),
       someday: false, // if you support Someday as a stored flag, map it here
       repeatsDaily: t.repeatOnCompletion,
       hasReminder: t.remindAt != null,
       hasDeadline: t.due != null,
+      stats: t.stats, // ✅ seed multi-stat picks into editor
     );
 
-    final initialChecklist = t.checklist
-        .map((c) => tedit.ChecklistEntry(text: c.text, done: c.done))
+    final List<tmodel.ChecklistEntry> initialChecklist = t.checklist
+        .map((TaskChecklistEntry c) =>
+            tmodel.ChecklistEntry(text: c.text, done: c.done))
         .toList();
 
-    final res = await Navigator.push<tedit.TaskEditorResult>(
+    final res = await Navigator.push<tmodel.TaskEditorResult>(
       context,
-      MaterialPageRoute(
+      MaterialPageRoute<tmodel.TaskEditorResult>(
         fullscreenDialog: true,
         builder: (_) => tedit.TaskEditorPage(
           initialTitle: t.title,
@@ -439,7 +510,7 @@ class _DayDetailPageState extends State<DayDetailPage> {
             DayPlanStore.I.removeTask(_dayOnly, t.id);
             Navigator.of(context).pop();
           },
-          // NEW: seed the page so reopening shows saved subtasks + options
+          // Seed the page so reopening shows saved subtasks + options + stats.
           initialOptions: initialOptions,
           initialChecklist: initialChecklist,
         ),
@@ -449,28 +520,27 @@ class _DayDetailPageState extends State<DayDetailPage> {
     if (res == null) return;
 
     // Map editor result back to the task model
+    final pickedDate = res.date;
     final updated = t.copyWith(
       title: res.title,
       repeatOnCompletion: res.repeatOnCompletion,
-      due: (res.hasDeadline && res.date != null)
-          ? DayPlanStore.dateOnly(res.date!)
+      due: (res.hasDeadline && pickedDate != null)
+          ? DayPlanStore.dateOnly(pickedDate)
           : null,
-      remindAt: (res.hasReminder && res.date != null)
-          ? DateTime(res.date!.year, res.date!.month, res.date!.day, 9, 0)
+      remindAt: (res.hasReminder && pickedDate != null)
+          ? DateTime(pickedDate.year, pickedDate.month, pickedDate.day, 9, 0)
           : null,
       checklist: res.checklist
-          .map((c) => TaskChecklistEntry(text: c.text, done: c.done))
+          .map((tmodel.ChecklistEntry c) =>
+              TaskChecklistEntry(text: c.text, done: c.done))
           .toList(),
+      stats: res.stats, // ✅ persist multi-stat picks from editor
     );
 
-    // If the date was changed to another day, move the task
+    // If the date was changed to another day, move the task (preserve ID)
     final newDay = DayPlanStore.dateOnly(res.date ?? _dayOnly);
     if (newDay != _dayOnly) {
-      DayPlanStore.I.removeTask(_dayOnly, t.id);
-      DayPlanStore.I.addTask(
-        newDay,
-        updated.copyWith(id: DayPlanStore.genId()),
-      );
+      DayPlanStore.I.moveTask(_dayOnly, t.id, newDay, replaceWith: updated);
     } else {
       DayPlanStore.I.replaceTask(_dayOnly, t.id, updated);
     }
@@ -573,7 +643,7 @@ class _DayDetailPageState extends State<DayDetailPage> {
   // -------------------- add sheets --------------------
 
   void _showAddSheet() {
-    showModalBottomSheet(
+    showModalBottomSheet<void>(
       context: context,
       backgroundColor: const Color(0xFF1A2029),
       shape: const RoundedRectangleBorder(
@@ -612,9 +682,9 @@ class _DayDetailPageState extends State<DayDetailPage> {
   /// Launch the v2 reminder page (saves on Done)
   Future<void> _showAddReminder() async {
     final d = DayPlanStore.dateOnly(widget.day);
-    await Navigator.push(
+    await Navigator.push<void>(
       context,
-      MaterialPageRoute(
+      MaterialPageRoute<void>(
         builder: (_) => rtp.EmptyReminderTimePage(day: d),
         fullscreenDialog: true,
       ),
@@ -625,9 +695,9 @@ class _DayDetailPageState extends State<DayDetailPage> {
   Future<void> _showAddTask() async {
     final d = DayPlanStore.dateOnly(widget.day);
 
-    final result = await Navigator.push<tedit.TaskEditorResult>(
+    final result = await Navigator.push<tmodel.TaskEditorResult>(
       context,
-      MaterialPageRoute(
+      MaterialPageRoute<tmodel.TaskEditorResult>(
         fullscreenDialog: true,
         builder: (_) => const tedit.TaskEditorPage(),
       ),
@@ -640,12 +710,14 @@ class _DayDetailPageState extends State<DayDetailPage> {
         title: result.title,
         repeatOnCompletion: result.repeatOnCompletion,
         checklist: result.checklist
-            .map((c) => TaskChecklistEntry(text: c.text, done: c.done))
+            .map((tmodel.ChecklistEntry c) =>
+                TaskChecklistEntry(text: c.text, done: c.done))
             .toList(),
         due: (result.hasDeadline && result.date != null) ? placeOn : null,
         remindAt: (result.hasReminder && result.date != null)
             ? DateTime(placeOn.year, placeOn.month, placeOn.day, 9, 0)
             : null,
+        stats: result.stats, // ✅ persist from create flow
       );
       DayPlanStore.I.addTask(placeOn, task);
       // Optional: mirror a one-hour reminder block at 9am if hasReminder
@@ -690,7 +762,6 @@ class _SummaryView extends StatelessWidget {
               )
             else
               ...reminders.map(_ReminderCard.new),
-
             const SizedBox(height: 18),
             const _SectionHeader('TASKS'),
             if (tasks.isEmpty)
@@ -702,10 +773,18 @@ class _SummaryView extends StatelessWidget {
               ...tasks.map(
                 (t) => _TaskCard(
                   task: t,
-                  onChanged: (v) => DayPlanStore.I.toggleTask(day, t.id, v),
+                  // ✅ Checkbox completes/toggles task
+                  onChanged: (v) async {
+                    if (v == true) {
+                      await _completeTaskAndShowXp(context, day, t);
+                    } else {
+                      DayPlanStore.I.toggleTask(day, t.id, false);
+                    }
+                  },
+                  // ✅ Title opens the Task Editor
+                  onOpen: () => _openTask(context, t),
                 ),
               ),
-
             const SizedBox(height: 18),
             const _SectionHeader('WEATHER'),
             _WeatherCard(day: day),
@@ -715,12 +794,153 @@ class _SummaryView extends StatelessWidget {
     );
   }
 
+  // ---------- tiny safe getter wrapper ----------
+  // Accepts any closure returning Object?, then returns it iff it's T.
+  static T? _tryGet<T>(Object? Function() read) {
+    try {
+      final v = read();
+      return v is T ? v : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // safe navigation; no unnecessary !
   static void _showAddReminder(BuildContext context) => context
-      .findAncestorStateOfType<_DayDetailPageState>()!
-      ._showAddReminder();
+      .findAncestorStateOfType<_DayDetailPageState>()
+      ?._showAddReminder();
 
   static void _showAddTask(BuildContext context) =>
-      context.findAncestorStateOfType<_DayDetailPageState>()!._showAddTask();
+      context.findAncestorStateOfType<_DayDetailPageState>()?._showAddTask();
+
+  // ✅ Helper to reach the page's _openTask from this stateless widget
+  static void _openTask(BuildContext context, Task t) =>
+      context.findAncestorStateOfType<_DayDetailPageState>()?._openTask(t);
+
+  // ---------- helpers for fallback awarding (robust StatPick probing) ----------
+  /// Pull the category for a stat pick by looking up its **stat id**
+  /// in StatRepository. We *never* assume fields like `categoryId` exist.
+  static String? _catIdFromPick(tmodel.StatPick pick) {
+    // Try common shapes, preferring `id`, then `statId`, then nested `stat.id`
+    final String? statId = _tryGet<String>(() => (pick as dynamic).id) ??
+        _tryGet<String>(() => (pick as dynamic).statId) ??
+        _tryGet<String>(() => ((pick as dynamic).stat as dynamic).id);
+
+    if (statId == null || statId.isEmpty) return null;
+    final cat = StatRepository.getCategoryForStat(statId);
+    return cat?.toUpperCase();
+  }
+
+  /// Read a numeric amount from the pick.
+  static int _xpFromPick(tmodel.StatPick pick) {
+    final num? n = _tryGet<num>(() => (pick as dynamic).value) ??
+        _tryGet<num>(() => (pick as dynamic).amount) ??
+        _tryGet<num>(() => (pick as dynamic).xp) ??
+        _tryGet<num>(() => (pick as dynamic).count);
+    if (n == null) return 0;
+    return n is int ? n : n.round();
+  }
+
+  /// If toggling the task didn't change any category XP (e.g. rewarder didn't run),
+  /// award based on the task's stat picks right here.
+  static Future<bool> _tryFallbackAward(
+    BuildContext context,
+    ObjectiveProvider provider,
+    Task t,
+  ) async {
+    bool any = false;
+    for (final p in t.stats) {
+      final catId = _catIdFromPick(p);
+      final xp = _xpFromPick(p);
+      if (catId != null && xp > 0) {
+        provider.addXpToCategory(catId, xp);
+        any = true;
+      }
+    }
+    if (any) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    return any;
+  }
+
+  // ✅ Completion helper that shows sequential XP popups per category that increased.
+  static Future<void> _completeTaskAndShowXp(
+    BuildContext context,
+    DateTime day,
+    Task t,
+  ) async {
+    final provider = context.read<ObjectiveProvider>();
+
+    // Snapshot BEFORE per-category XP
+    final before = <String, int>{
+      for (final c in provider.categories.values) c.name: c.xp,
+    };
+
+    // Toggle complete (store will update local state)
+    DayPlanStore.I.toggleTask(day, t.id, true);
+
+    // Give any async work a tick
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    if (!context.mounted) return;
+
+    // Snapshot AFTER per-category XP
+    Map<String, int> after = {
+      for (final c in provider.categories.values) c.name: c.xp,
+    };
+
+    // Build positive deltas
+    List<_CatDelta> deltas = [];
+    after.forEach((name, xpAfter) {
+      final xpBefore = before[name] ?? 0;
+      final delta = xpAfter - xpBefore;
+      if (delta > 0) {
+        deltas.add(_CatDelta(name: name, from: xpBefore, to: xpAfter));
+      }
+    });
+
+    // If nothing changed, try a UI-side fallback award from task stat picks.
+    if (deltas.isEmpty && t.stats.isNotEmpty) {
+      final didAward = await _tryFallbackAward(context, provider, t);
+      if (didAward && context.mounted) {
+        after = {for (final c in provider.categories.values) c.name: c.xp};
+        deltas = [];
+        after.forEach((name, xpAfter) {
+          final xpBefore = before[name] ?? 0;
+          final delta = xpAfter - xpBefore;
+          if (delta > 0) {
+            deltas.add(_CatDelta(name: name, from: xpBefore, to: xpAfter));
+          }
+        });
+      }
+    }
+
+    if (deltas.isEmpty) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Task completed. No XP change detected.'),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(milliseconds: 1400),
+        ),
+      );
+      return;
+    }
+
+    // Sort largest gain first (nicer if many)
+    deltas.sort((a, b) => (b.to - b.from).compareTo(a.to - a.from));
+
+    // Show each popup sequentially
+    for (final d in deltas) {
+      if (!context.mounted) return;
+      await XpGainBottomBar.show(
+        context,
+        label: d.name.toUpperCase(),
+        fromXp: d.from,
+        toXp: d.to,
+        color: _xpColorForCategory(d.name),
+      );
+    }
+  }
 }
 
 /// -------------------- Schedule View --------------------
@@ -837,10 +1057,14 @@ class _ScheduleView extends StatelessWidget {
                           onTap: () => onOpenTask(t),
                           child: Row(
                             children: [
-                              // ✅ Inline complete button (replaces the yellow dot)
+                              // ✅ Inline complete button
                               InkResponse(
                                 onTap: () =>
-                                    DayPlanStore.I.toggleTask(day, t.id, true),
+                                    _SummaryView._completeTaskAndShowXp(
+                                  context,
+                                  day,
+                                  t,
+                                ),
                                 customBorder: const CircleBorder(),
                                 child: const Padding(
                                   padding: EdgeInsets.all(6.0),
@@ -1043,11 +1267,12 @@ class _ReminderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     String time = '';
-    if (reminder.start != null && reminder.end != null) {
-      time =
-          '${reminder.start!.format(context)} \u2192 ${reminder.end!.format(context)}';
-    } else if (reminder.start != null) {
-      time = reminder.start!.format(context);
+    final s = reminder.start;
+    final e = reminder.end;
+    if (s != null && e != null) {
+      time = '${s.format(context)} \u2192 ${e.format(context)}';
+    } else if (s != null) {
+      time = s.format(context);
     }
 
     return _Card(
@@ -1083,25 +1308,58 @@ class _ReminderCard extends StatelessWidget {
 }
 
 class _TaskCard extends StatelessWidget {
-  const _TaskCard({required this.task, required this.onChanged});
+  const _TaskCard({
+    required this.task,
+    required this.onChanged,
+    required this.onOpen,
+  });
+
   final Task task;
   final ValueChanged<bool> onChanged;
+  final VoidCallback onOpen;
 
   @override
   Widget build(BuildContext context) {
     return _Card(
-      child: CheckboxListTile(
-        value: task.done,
-        onChanged: (v) => onChanged(v ?? false),
-        contentPadding: const EdgeInsets.only(left: 6, right: 8),
-        controlAffinity: ListTileControlAffinity.leading,
-        title: Text(
-          task.title,
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w600,
-            fontSize: 15,
-          ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // ✅ Only this checkbox toggles completion
+            Checkbox(
+              value: task.done,
+              onChanged: (v) => onChanged(v ?? false),
+              shape: const CircleBorder(),
+              side: const BorderSide(color: Colors.white70),
+              activeColor: Colors.white,
+              checkColor: const Color(0xFF262C34),
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            const SizedBox(width: 6),
+            // ✅ Only this title area opens the editor
+            Expanded(
+              child: InkWell(
+                onTap: onOpen,
+                borderRadius: BorderRadius.circular(10),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+                  child: Text(
+                    task.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 15,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+          ],
         ),
       ),
     );
@@ -1114,11 +1372,11 @@ class _WeatherCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _Card(
+    return const _Card(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 22, 16, 22),
+        padding: EdgeInsets.fromLTRB(16, 22, 16, 22),
         child: Column(
-          children: const [
+          children: [
             Icon(Icons.cloud, size: 34, color: Colors.white70),
             SizedBox(height: 8),
             Text(
@@ -1196,52 +1454,6 @@ class _AddActionTile extends StatelessWidget {
   }
 }
 
-class _SheetTitle extends StatelessWidget {
-  const _SheetTitle(this.text);
-  final String text;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: Text(
-      text,
-      style: const TextStyle(
-        color: Colors.white,
-        fontSize: 16,
-        fontWeight: FontWeight.w800,
-        letterSpacing: 0.5,
-      ),
-    ),
-  );
-}
-
-class _PrimaryButton extends StatelessWidget {
-  const _PrimaryButton({required this.label, required this.onTap});
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: double.infinity,
-      child: ElevatedButton(
-        style: ElevatedButton.styleFrom(
-          backgroundColor: const Color(0xFF25D0DB),
-          foregroundColor: Colors.black,
-          elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          textStyle: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
-        ),
-        onPressed: onTap,
-        child: Text(label),
-      ),
-    );
-  }
-}
-
 /// --------------------------------------------------------------------------------
 /// Timeline board (now unified for reminders + scheduled tasks)
 /// --------------------------------------------------------------------------------
@@ -1303,11 +1515,11 @@ class _TimelineBoard extends StatelessWidget {
                   child: Align(
                     alignment: Alignment.topLeft,
                     child: Padding(
-                      padding: EdgeInsets.only(top: _rowSpacing / 2),
+                      padding: const EdgeInsets.only(top: _rowSpacing / 2),
                       child: Text(
-                        DateFormat(
-                          'h a',
-                        ).format(DateTime(0, 1, 1, h)).toUpperCase(),
+                        DateFormat('h a')
+                            .format(DateTime(0, 1, 1, h))
+                            .toUpperCase(),
                         style: const TextStyle(
                           color: Color(0xCCFFFFFF),
                           fontSize: 12,
@@ -1341,16 +1553,15 @@ class _TimelineBoard extends StatelessWidget {
                         child: Column(
                           children: List.generate(24, (index) {
                             return Padding(
-                              padding: EdgeInsets.symmetric(
+                              padding: const EdgeInsets.symmetric(
                                 vertical: _rowSpacing / 2,
                               ),
                               child: Container(
                                 height: _rowHeight,
                                 decoration: BoxDecoration(
                                   color: const Color(0xFF641023),
-                                  borderRadius: BorderRadius.circular(
-                                    _contentRadius,
-                                  ),
+                                  borderRadius:
+                                      BorderRadius.circular(_contentRadius),
                                 ),
                               ),
                             );
@@ -1379,7 +1590,7 @@ class _TimelineBoard extends StatelessWidget {
                           onTap: () => onTapItem(e.item),
                         ),
                       );
-                    }).toList(),
+                    }),
                   ],
                 );
               },
@@ -1414,9 +1625,8 @@ class _BoardCard extends StatelessWidget {
         child: Container(
           clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
-            color: item.isTask
-                ? const Color(0xFF27455A)
-                : const Color(0xFF5A0E1E),
+            color:
+                item.isTask ? const Color(0xFF27455A) : const Color(0xFF5A0E1E),
             borderRadius: BorderRadius.circular(18),
             boxShadow: const [
               BoxShadow(
@@ -1465,14 +1675,15 @@ class _BoardItem {
     required int startMin,
     required int endMin,
     required Reminder source,
-  }) => _BoardItem._(
-    id: id,
-    title: title,
-    startMin: startMin,
-    endMin: endMin,
-    isTask: false,
-    source: source,
-  );
+  }) =>
+      _BoardItem._(
+        id: id,
+        title: title,
+        startMin: startMin,
+        endMin: endMin,
+        isTask: false,
+        source: source,
+      );
 
   factory _BoardItem.task({
     required String id,
@@ -1480,12 +1691,41 @@ class _BoardItem {
     required int startMin,
     required int endMin,
     required Task source,
-  }) => _BoardItem._(
-    id: id,
-    title: title,
-    startMin: startMin,
-    endMin: endMin,
-    isTask: true,
-    source: source,
-  );
+  }) =>
+      _BoardItem._(
+        id: id,
+        title: title,
+        startMin: startMin,
+        endMin: endMin,
+        isTask: true,
+        source: source,
+      );
+}
+
+/// -------------------- XP helpers --------------------
+class _CatDelta {
+  final String name;
+  final int from;
+  final int to;
+  _CatDelta({required this.name, required this.from, required this.to});
+}
+
+// Match XpLevelBar colors so everything feels consistent.
+Color _xpColorForCategory(String name) {
+  switch (name.toLowerCase()) {
+    case 'rapping':
+      return Colors.redAccent;
+    case 'production':
+      return Colors.blueAccent;
+    case 'health':
+      return Colors.greenAccent;
+    case 'knowledge':
+      return Colors.deepPurpleAccent;
+    case 'networking':
+      return Colors.teal;
+    case 'content':
+      return Colors.cyan;
+    default:
+      return Colors.grey;
+  }
 }

@@ -5,6 +5,15 @@ import 'block_manager.dart';
 import 'editor_history.dart';
 import 'glyph_scanner.dart';
 
+/// Simple holder to replace a record: (type, abs, len)
+class _InsertGlyph {
+  final BlockType type;
+  final int abs;
+  final int len;
+  const _InsertGlyph(
+      {required this.type, required this.abs, required this.len});
+}
+
 class PasteRebuilder {
   String? _lastSig;
   DateTime? _lastAt;
@@ -44,7 +53,7 @@ class PasteRebuilder {
 
     // Dedup by absolute offset and skip overlaps with existing same-type blocks.
     final seenAbs = <int>{};
-    final toInsert = <({BlockType type, int abs, int len})>[];
+    final toInsert = <_InsertGlyph>[];
 
     for (final h in hits) {
       final abs = insertStart + h.relOffset;
@@ -52,15 +61,15 @@ class PasteRebuilder {
 
       final exists = mgr.blocks.any((b) {
         if (b.type != h.type) return false;
-        final existingLen = BlockRegistry.instance
-            .placeholderGlyph(b.type)
-            .length;
+        final existingLen =
+            BlockRegistry.instance.placeholderGlyph(b.type).length;
         final bStart = b.start, bEnd = b.start + existingLen;
         final newStart = abs, newEnd = abs + h.length;
         return !(newEnd <= bStart || bEnd <= newStart); // overlap?
       });
+
       if (!exists) {
-        toInsert.add((type: h.type, abs: abs, len: h.length));
+        toInsert.add(_InsertGlyph(type: h.type, abs: abs, len: h.length));
       }
     }
 

@@ -1,5 +1,9 @@
+// lib/ui/widgets/xp_gain_bottom_bar.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:provider/provider.dart'; // (not strictly needed; safe if present)
+import 'package:soundpool/soundpool.dart'; // 🔊 level-up SFX
 import 'package:kontinuum/data/level_utils.dart';
 
 class XpGainBottomBar {
@@ -38,6 +42,51 @@ class XpGainBottomBar {
   }
 }
 
+/// ---------------------------------------------------------------------------
+/// 🔊 Level-up SFX (stacks/overlaps)
+/// ---------------------------------------------------------------------------
+class _LevelUpSfx {
+  _LevelUpSfx._();
+  static final _LevelUpSfx instance = _LevelUpSfx._();
+
+  Soundpool? _pool;
+  int? _levelupId;
+  bool _loading = false;
+  bool _loaded = false;
+
+  void warmup() {
+    if (_loaded || _loading) return;
+    _loading = true;
+    Future<void>(() async {
+      try {
+        _pool ??= Soundpool.fromOptions(
+          options: const SoundpoolOptions(
+            streamType: StreamType.notification,
+            maxStreams: 8,
+          ),
+        );
+        final data = await rootBundle.load('assets/audio/levelup.wav');
+        _levelupId = await _pool!.load(data);
+        _loaded = true;
+      } catch (_) {
+        // never crash UI if audio load fails
+      } finally {
+        _loading = false;
+      }
+    });
+  }
+
+  void play() {
+    try {
+      if (!_loaded || _pool == null || _levelupId == null) {
+        warmup();
+        return;
+      }
+      _pool!.play(_levelupId!);
+    } catch (_) {}
+  }
+}
+
 class _XpGainOverlay extends StatefulWidget {
   const _XpGainOverlay({
     required this.label,
@@ -67,9 +116,18 @@ class _XpGainOverlayState extends State<_XpGainOverlay>
   late final Animation<Offset> _offset;
   late final Animation<int> _xp;
 
+  // 🔔 Track current level to detect crossings while the XP animates
+  late int _lastLevel;
+
   @override
   void initState() {
     super.initState();
+
+    // Warm the level-up sound (non-blocking).
+    _LevelUpSfx.instance.warmup();
+
+    // Start level from the *fromXp* value.
+    _lastLevel = LevelUtils.getCategoryLevelFromXp(widget.fromXp);
 
     // Appear/disappear
     _inOut = AnimationController(
@@ -93,7 +151,16 @@ class _XpGainOverlayState extends State<_XpGainOverlay>
     _xp = IntTween(
       begin: widget.fromXp,
       end: widget.toXp,
-    ).animate(CurvedAnimation(parent: _count, curve: Curves.easeOutCubic));
+    ).animate(CurvedAnimation(parent: _count, curve: Curves.easeOutCubic))
+      // 👇 On every XP tick, check if we crossed a level boundary.
+      ..addListener(() {
+        final lvl = LevelUtils.getCategoryLevelFromXp(_xp.value);
+        if (lvl > _lastLevel) {
+          // For multi-level jumps, this will fire once per level crossed.
+          _LevelUpSfx.instance.play();
+          _lastLevel = lvl;
+        }
+      });
 
     _run();
   }
@@ -101,7 +168,7 @@ class _XpGainOverlayState extends State<_XpGainOverlay>
   Future<void> _run() async {
     try {
       await _inOut.forward(); // slide/fade in
-      await _count.forward(); // count/level progress
+      await _count.forward(); // count/level progress (triggers SFX on crossing)
       await Future.delayed(widget.holdDuration); // hold visible
       await _inOut.reverse(); // slide/fade out
     } finally {
@@ -161,8 +228,7 @@ class _XpGainOverlayState extends State<_XpGainOverlay>
                               fontWeight: FontWeight.w800,
                               color: widget.color,
                               fontSize: 14,
-                              decoration:
-                                  TextDecoration.none, // no yellow lines
+                              decoration: TextDecoration.none,
                             ),
                           ),
                           const SizedBox(height: 8),

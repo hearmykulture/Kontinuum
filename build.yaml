@@ -1,0 +1,11 @@
+# build.yaml
+targets:
+  $default:
+    sources:
+      - lib/**
+      - pubspec.yaml
+      - $package$
+    builders:
+      hive_generator:hive_generator:
+        generate_for:
+          - lib/models/**.dart

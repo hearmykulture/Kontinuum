@@ -5,11 +5,18 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ">=3.8.1 <4.0.0"
+  sdk: ">=3.2.0 <4.0.0"
+  flutter: ">=3.16.0"
 
 dependencies:
   flutter:
     sdk: flutter
+
+  # Networking
+  http: ^1.2.2
+
+  # Plaid Link
+  plaid_flutter: ^4.1.0
 
   collection: ^1.17.0
   characters: ^1.3.0
@@ -23,22 +30,26 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_colorpicker: ^1.0.4
   fl_chart: ^0.65.0
-  visibility_detector: ^0.4.0   # 👀 Detects widget visibility on screen
+  visibility_detector: ^0.4.0
 
   # 💾 Local Persistence
   hive: ^2.2.3
   hive_flutter: ^1.1.0
-  path_provider: ^2.0.11
+  path_provider: ^2.1.5
 
-  # 🎧 Audio Playback + Beat Loading
-  just_audio: ^0.9.36
+  # 🎧 Audio (short SFX)
+  soundpool: ^2.3.0
+
   file_picker: ^10.2.3
-  just_waveform: ^0.0.5   # 🎵 NEW — Waveform extraction & rendering
+  just_waveform: ^0.0.5
 
   # 🔐 Permissions & Device Info
-  permission_handler: ^11.0.0   # ⬅️ bumped to v11 to drop v1 Android embedding
+  permission_handler: ^11.0.0
   device_info_plus: ^9.0.0
   path: ^1.8.3
+
+  # ✨ Lottie animations
+  lottie: ^3.0.0
 
 dev_dependencies:
   flutter_test:
@@ -48,10 +59,15 @@ dev_dependencies:
   # 🔧 Hive Type Adapter Generator
   build_runner: ^2.4.6
   hive_generator: ^2.0.1
-  dart_code_metrics: ^5.6.0
+
+  # (Optional)
+  dart_code_metrics: ^4.19.2
 
 flutter:
   uses-material-design: true
 
   assets:
-    - assets/cmudict.json   # <-- CMU dictionary
+    - assets/cmudict.json
+    - assets/lottie/confetti.json
+    - assets/audio/complete_chime.wav
+    - assets/audio/levelup.wav

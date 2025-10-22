@@ -28,17 +28,37 @@ class Skill extends HiveObject {
     this.stats = const [],
   });
 
-  /// Total XP required to "master" this skill
-  int get maxXp => stats.fold(0, (sum, stat) => sum + stat.maxXp);
+  /// Total XP required to "master" this skill (sum of child stat ceilings).
+  int get maxXp => stats.fold<int>(0, (sum, stat) => sum + stat.maxXp);
 
-  /// Skill level (1–100), based on % of max XP
-  int get level => (xp / maxXp * 100).clamp(1, 100).toInt();
+  /// Skill level (1–100) based on % of max XP.
+  /// Guards:
+  /// - maxXp <= 0  → level 1
+  /// - negative xp → treated as 0
+  /// - xp > maxXp  → clamped to 100
+  int get level {
+    final m = maxXp;
+    if (m <= 0) return 1;
+    final ratio = (xp.clamp(0, m) / m);
+    return (ratio * 100).clamp(1.0, 100.0).toInt();
+  }
 
-  /// Progress toward next level
+  /// Progress within the **current level** (0.0–1.0).
+  /// Uses level thresholds derived from maxXp with full guards.
   double get levelProgress {
-    final levelXp = (level / 100 * maxXp).toInt();
-    final nextXp = ((level + 1) / 100 * maxXp).toInt();
-    return ((xp - levelXp) / (nextXp - levelXp)).clamp(0.0, 1.0);
+    final m = maxXp;
+    if (m <= 0) return 0.0;
+
+    final lvl = level; // already clamped (1..100)
+    if (lvl >= 100) return 1.0; // at cap
+
+    final startOfLevelXp = (((lvl - 1) / 100.0) * m).toInt();
+    final endOfLevelXp = ((lvl / 100.0) * m).toInt();
+    final span = (endOfLevelXp - startOfLevelXp);
+    if (span <= 0) return 0.0;
+
+    final pos = (xp.clamp(0, m) - startOfLevelXp);
+    return (pos / span).clamp(0.0, 1.0).toDouble();
   }
 
   Map<String, Stat> get statsById => {for (final stat in stats) stat.id: stat};

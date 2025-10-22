@@ -77,15 +77,15 @@ class ObjectiveProvider with ChangeNotifier {
 
   DateTime _normalize(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
 
+  // ✅ Use interval-aware activation instead of weekday toggles only
   List<Objective> getObjectivesForDay(DateTime date) {
     final normalized = _normalize(date);
-    final weekday = normalized.weekday;
 
     final dayObjectives = _objectivesByDate[normalized] ?? [];
     final overrides = {for (var o in dayObjectives) o.id: o};
 
     final result = _staticObjectives
-        .where((o) => o.isActiveOnWeekday(weekday))
+        .where((o) => o.isActiveOnDate(normalized))
         .map((o) => overrides[o.id] ?? o.copyWith())
         .toList();
 
@@ -314,10 +314,8 @@ class ObjectiveProvider with ChangeNotifier {
     final objectives = _objectivesByDate[normalized];
     if (objectives == null) return;
 
-    final completedIds = objectives
-        .where((o) => o.isCompleted)
-        .map((o) => o.id)
-        .toSet();
+    final completedIds =
+        objectives.where((o) => o.isCompleted).map((o) => o.id).toSet();
 
     for (final obj in objectives) {
       final isBlocked = obj.prerequisiteIds.any(
@@ -422,9 +420,10 @@ class ObjectiveProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  // ✅ No double seeding of skills
   void addStaticObjectives() {
     ObjectiveSeeder.seedAll(this);
-    SkillSeeder.seedAll(this);
+    // SkillSeeder.seedAll(this); // handled in _init() if empty
   }
 
   Map<DateTime, double> getProgressForSurroundingWeek(DateTime centerDate) {
@@ -498,9 +497,7 @@ class ObjectiveProvider with ChangeNotifier {
 
   Future<void> _init() async {
     try {
-      _categories.addEntries(
-        coreCategoryIds.map((id) => MapEntry(id, Category(id: id, name: id))),
-      );
+      // (Categories are already primed in the constructor)
 
       final loadedStats = await _hiveService.loadStats();
       final loadedCategories = await _hiveService.loadCategories();
@@ -640,33 +637,40 @@ class ObjectiveProvider with ChangeNotifier {
     return _categories[id]!;
   }
 
+  // ✅ Deduplicate by ID to avoid identical stats from different instances
   List<Stat> getStatsForCategory(String categoryId) {
-    final List<Stat> statsInCategory = [];
+    final out = <Stat>[];
+    final seen = <String>{};
+
+    void addIfNew(Stat s) {
+      if (seen.add(s.id)) out.add(s);
+    }
 
     final skills = _skillsByCategory[categoryId] ?? const <Skill>[];
     for (final skill in skills) {
-      statsInCategory.addAll(skill.stats);
+      for (final s in skill.stats) addIfNew(s);
     }
 
-    for (final stat in _stats.values) {
-      final meta = StatRepository.getById(stat.id);
-      if (meta != null &&
-          meta.categoryId == categoryId &&
-          !statsInCategory.contains(stat)) {
-        statsInCategory.add(stat);
-      }
+    for (final s in _stats.values) {
+      final meta = StatRepository.getById(s.id);
+      if (meta != null && meta.categoryId == categoryId) addIfNew(s);
     }
-    return statsInCategory;
+    return out;
   }
 
   Map<String, int> getStatXpForTimeframe(String timeframe) {
     final now = DateTime.now();
-    final cutoff = switch (timeframe) {
-      'Last 7 Days' => now.subtract(const Duration(days: 7)),
-      'Last 30 Days' => now.subtract(const Duration(days: 30)),
-      'This Week' => DateTime(now.year, now.month, now.day - (now.weekday - 1)),
-      _ => null,
-    };
+
+    DateTime? cutoff;
+    if (timeframe == 'Last 7 Days') {
+      cutoff = now.subtract(const Duration(days: 7));
+    } else if (timeframe == 'Last 30 Days') {
+      cutoff = now.subtract(const Duration(days: 30));
+    } else if (timeframe == 'This Week') {
+      cutoff = DateTime(now.year, now.month, now.day - (now.weekday - 1));
+    } else {
+      cutoff = null;
+    }
 
     final result = <String, int>{};
     for (final entry in _statHistory) {
@@ -704,13 +708,18 @@ class ObjectiveProvider with ChangeNotifier {
 
   DateTime? _getTimeframeCutoff(String timeframe) {
     final now = DateTime.now();
-    return switch (timeframe) {
-      'Last 7 Days' => now.subtract(const Duration(days: 7)),
-      'Last 30 Days' => now.subtract(const Duration(days: 30)),
-      'This Week' => DateTime(now.year, now.month, now.day - (now.weekday - 1)),
-      'All Time' => null,
-      _ => null,
-    };
+
+    if (timeframe == 'Last 7 Days') {
+      return now.subtract(const Duration(days: 7));
+    } else if (timeframe == 'Last 30 Days') {
+      return now.subtract(const Duration(days: 30));
+    } else if (timeframe == 'This Week') {
+      return DateTime(now.year, now.month, now.day - (now.weekday - 1));
+    } else if (timeframe == 'All Time') {
+      return null;
+    } else {
+      return null;
+    }
   }
 
   // ──────────────────────────── TALLY XP HELPERS ────────────────────────────
@@ -847,9 +856,8 @@ class ObjectiveProvider with ChangeNotifier {
       if (unitDelta == 0) {
         final bool nowCompleted = finalAmount >= obj.targetAmount;
         obj.isCompleted = nowCompleted;
-        obj.completedOn = nowCompleted
-            ? (obj.completedOn ?? DateTime.now())
-            : null;
+        obj.completedOn =
+            nowCompleted ? (obj.completedOn ?? DateTime.now()) : null;
 
         evaluateLocks(normalized);
         notifyListeners();
@@ -871,9 +879,8 @@ class ObjectiveProvider with ChangeNotifier {
 
       final bool nowCompleted = finalAmount >= obj.targetAmount;
       obj.isCompleted = nowCompleted;
-      obj.completedOn = nowCompleted
-          ? (obj.completedOn ?? DateTime.now())
-          : null;
+      obj.completedOn =
+          nowCompleted ? (obj.completedOn ?? DateTime.now()) : null;
 
       _applyTallyDelta(obj: obj, xpDelta: xpDelta, unitDelta: unitDelta);
 
@@ -1053,7 +1060,7 @@ class ObjectiveProvider with ChangeNotifier {
     String categoryId,
     List<String> orderedIds,
   ) async {
-    final weekday = _normalize(date).weekday;
+    final normalized = _normalize(date);
 
     void reorderSubset(
       List<Objective> list,
@@ -1081,17 +1088,16 @@ class ObjectiveProvider with ChangeNotifier {
       }
     }
 
-    // Static subset for this weekday & category (remove unnecessary parentheses)
+    // ✅ Static subset for *this date* & category (interval-aware)
     reorderSubset(
       _staticObjectives,
       (o) =>
           o.categoryIds.isNotEmpty &&
           o.categoryIds.first == categoryId &&
-          o.isActiveOnWeekday(weekday),
+          o.isActiveOnDate(normalized),
     );
 
-    // Dated list subset (remove unnecessary parentheses)
-    final normalized = _normalize(date);
+    // Dated list subset
     final dayList = _objectivesByDate[normalized];
     if (dayList != null) {
       reorderSubset(

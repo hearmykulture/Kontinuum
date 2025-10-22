@@ -2,12 +2,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:soundpool/soundpool.dart'; // 🔊 stacked chime
 
 import 'package:kontinuum/ui/widgets/objective/objective_tokens.dart';
 import 'package:kontinuum/ui/widgets/objective/complete_button.dart';
 import 'package:kontinuum/ui/widgets/objective/tally_stepper.dart';
 import 'package:kontinuum/ui/widgets/objective/stopwatch_sheet.dart';
 import 'package:kontinuum/ui/widgets/objective/stat_progress.dart';
+import 'package:kontinuum/ui/widgets/lottie_once.dart';
 
 import 'package:kontinuum/models/objective.dart';
 import 'package:kontinuum/models/stat.dart';
@@ -15,6 +17,51 @@ import 'package:kontinuum/data/stat_repository.dart';
 import 'package:kontinuum/providers/objective_provider.dart';
 import 'package:kontinuum/ui/widgets/objective_detail_popup.dart';
 import 'package:kontinuum/ui/widgets/xp_gain_bottom_bar.dart' as xpoverlay;
+
+/// ---- Stacking SFX (fire-and-forget; multiple overlaps allowed) -------------
+class _Sfx {
+  _Sfx._();
+  static final _Sfx instance = _Sfx._();
+
+  Soundpool? _pool;
+  int? _chimeId;
+  bool _loading = false;
+  bool _loaded = false;
+
+  void warmup() {
+    if (_loaded || _loading) return;
+    _loading = true;
+    Future<void>(() async {
+      try {
+        _pool ??= Soundpool.fromOptions(
+          options: const SoundpoolOptions(
+            streamType: StreamType.notification,
+            maxStreams: 8,
+          ),
+        );
+        final data = await rootBundle.load('assets/audio/complete_chime.wav');
+        _chimeId = await _pool!.load(data);
+        _loaded = true;
+      } catch (_) {
+      } finally {
+        _loading = false;
+      }
+    });
+  }
+
+  void playComplete() {
+    try {
+      if (!_loaded || _pool == null || _chimeId == null) {
+        warmup();
+        return;
+      }
+      _pool!.play(_chimeId!);
+    } catch (_) {}
+  }
+}
+
+/// Objective card background
+const Color kObjectiveCardBg = Color(0xFF13151B);
 
 /// Sent upward to make XpLevelBar jump+animate.
 class XpBarJumpNotification extends Notification {
@@ -44,18 +91,24 @@ class ObjectiveListItem extends StatefulWidget {
 
 class _ObjectiveListItemState extends State<ObjectiveListItem> {
   int _statIndex = 0;
-
-  /// Per-stat previous XP cache for bar animation.
   final Map<String, int> _lastXp = {};
 
-  // ---- Helpers for category → label/color/xp (used for XP jump+animate) ----
+  /// Previous completion state to detect rising edge.
+  bool? _prevCompletedForCheck;
+
+  /// Effects *latch*: set to true only by user-initiated actions on THIS card.
+  bool _armCompleteEffects = false;
+
+  static const double _kCheckConfettiSize = 220.0;
+
+  // ---- Helpers: category label/color/xp ----
   String? _primaryCategoryName() {
     if (widget.objective.categoryIds.isEmpty) return null; // -> TOTAL
     return widget.objective.categoryIds.first;
   }
 
   Color _catColor(String? name) {
-    if (name == null) return const Color(0xFFFF4D8D); // TOTAL hot pink
+    if (name == null) return const Color(0xFFFF4D8D);
     final c = ObjectiveTokens.categoryColors[name.toUpperCase()];
     return c ?? Colors.grey;
   }
@@ -65,7 +118,7 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
     final match = p.categories.values.where(
       (c) => c.name.toLowerCase() == categoryName.toLowerCase(),
     );
-    if (match.isEmpty) return p.totalXp; // fallback to total if unknown
+    if (match.isEmpty) return p.totalXp;
     return match.first.xp;
   }
 
@@ -93,19 +146,71 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
         s.contains('note');
   }
 
+  Objective _liveObjective(ObjectiveProvider p) {
+    final list = p.getObjectivesForDay(widget.selectedDate);
+    final idx = list.indexWhere((o) => o.id == widget.objective.id);
+    return idx == -1 ? widget.objective : list[idx];
+  }
+
+  void _showConfettiOverlay(BuildContext context) {
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (_) => IgnorePointer(
+        child: Positioned.fill(
+          child: Center(
+            child: SizedBox(
+              width: 160,
+              height: 160,
+              child: LottieOnce(
+                asset: 'assets/lottie/confetti.json',
+                play: true,
+                repeat: false,
+                onCompleted: () => entry.remove(),
+                fit: BoxFit.contain,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    Overlay.of(context, rootOverlay: true).insert(entry);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final p = context.read<ObjectiveProvider>();
+    // Seed baseline from the current day's live data.
+    _prevCompletedForCheck ??= _liveObjective(p).isCompleted;
+    // Warm audio non-blocking.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _Sfx.instance.warmup());
+  }
+
+  @override
+  void didUpdateWidget(covariant ObjectiveListItem oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // If the day or the bound objective changed, re-baseline and drop the latch.
+    if (oldWidget.selectedDate != widget.selectedDate ||
+        oldWidget.objective.id != widget.objective.id) {
+      final p = context.read<ObjectiveProvider>();
+      _prevCompletedForCheck = _liveObjective(p).isCompleted;
+      _armCompleteEffects = false; // do NOT play effects on rebuilds
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final isCompleted = widget.objective.isCompleted;
-
     return GestureDetector(
       behavior: HitTestBehavior.deferToChild,
       onTap: () {
         HapticFeedback.selectionClick();
         Navigator.of(context).push(
-          PageRouteBuilder(
+          PageRouteBuilder<void>(
             transitionDuration: const Duration(milliseconds: 500),
-            pageBuilder: (_, __, ___) =>
-                ObjectiveDetailPopup(objective: widget.objective),
+            pageBuilder: (_, __, ___) => ObjectiveDetailPopup(
+              objective: widget.objective,
+              selectedDate: widget.selectedDate,
+            ),
             opaque: false,
           ),
         );
@@ -114,34 +219,42 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
         cursor: SystemMouseCursors.click,
         child: Hero(
           tag: 'objective_${widget.objective.id}',
-          child: Material(
-            color: Colors.transparent,
-            child: AnimatedOpacity(
-              duration: const Duration(milliseconds: 250),
-              opacity: isCompleted ? 0.6 : 1.0,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1C1C1E),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: isCompleted
-                        ? Colors.greenAccent.withAlpha(102)
-                        : Colors.white12,
-                    width: 1,
-                  ),
-                  boxShadow: [
-                    if (isCompleted)
-                      BoxShadow(
-                        color: Colors.greenAccent.withAlpha(51),
-                        blurRadius: 8,
-                        spreadRadius: 1,
+          child: RepaintBoundary(
+            child: Material(
+              color: Colors.transparent,
+              child: Selector<ObjectiveProvider, bool>(
+                selector: (_, p) => _liveObjective(p).isCompleted,
+                builder: (_, isCompleted, __) {
+                  return AnimatedOpacity(
+                    duration: const Duration(milliseconds: 250),
+                    opacity: isCompleted ? 0.60 : 1.0,
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: kObjectiveCardBg,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: isCompleted
+                              ? Colors.greenAccent.withAlpha(90)
+                              : Colors.white.withValues(alpha: .08),
+                          width: 1,
+                        ),
+                        boxShadow: [
+                          if (isCompleted)
+                            BoxShadow(
+                              color: Colors.greenAccent.withAlpha(40),
+                              blurRadius: 6,
+                              spreadRadius: 1,
+                              offset: const Offset(0, 2),
+                            ),
+                        ],
                       ),
-                  ],
-                ),
-                child: _buildContent(context),
+                      child: _buildContent(context),
+                    ),
+                  );
+                },
               ),
             ),
           ),
@@ -180,34 +293,22 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         topRow,
-        if (!isLocked && isStopwatch)
-          const Padding(
-            padding: EdgeInsets.only(top: 6),
-            child: Text(
-              "",
-              style: TextStyle(
-                color: Colors.white54,
-                fontSize: ObjectiveTokens.kMicroSize,
-              ),
-            ),
-          ),
+        if (!isLocked && isStopwatch) const SizedBox(height: 4),
         const SizedBox(height: 10),
         _xpAndStatRow(),
         const SizedBox(height: 6),
-        // Category chips FIRST…
         Wrap(
           spacing: 6,
           runSpacing: 4,
           children: widget.objective.categoryIds.map(_categoryChip).toList(),
         ),
-        // …then mini stat XP bar UNDER the chips.
         if (hasStats) const SizedBox(height: 8),
         if (hasStats) _miniStatXpBar(context),
       ],
     );
   }
 
-  // ---------- Compact, tappable stat XP bar (wrap-aware animation) ----------
+  // ---------- Compact, tappable stat XP bar ----------
   Widget _miniStatXpBar(BuildContext context) {
     final ids = widget.objective.statIds;
     if (ids.isEmpty) return const SizedBox.shrink();
@@ -235,27 +336,22 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
           final xp = stat?.xp ?? 0;
           final maxXp = stat?.maxXp ?? 100;
 
-          // Display level = 1..100 (LevelUtils logic mirrored)
           final level =
-              ((maxXp <= 0 ? 0 : (xp / maxXp) * 100)).floor().clamp(0, 99) + 1;
+              (maxXp <= 0 ? 0 : (xp / maxXp) * 100).floor().clamp(0, 99) + 1;
 
-          final step = (maxXp <= 0 ? 1 : (maxXp / 100)).toDouble();
-          final lowerBound = ((level - 1) * step);
-          final currentWithin = (xp - lowerBound).clamp(0, step).toInt();
-          final stepInt = step.toInt();
+          final double step = (maxXp <= 0 ? 1.0 : maxXp / 100.0);
+          final double lowerBound = (level - 1) * step;
+          final int currentWithin = (xp - lowerBound).clamp(0.0, step).round();
+          final int stepInt = step.round();
 
           final display = meta?.display ?? statId;
 
-          // previous values for animation (must be computed BEFORE we update caches)
           final prevXp = _lastXp[statId] ?? xp;
-
-          // update caches for next build
           _lastXp[statId] = xp;
 
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Header line: label + level + index indicator (if many)
               Row(
                 children: [
                   Expanded(
@@ -265,7 +361,7 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 11,
-                        color: color.withOpacity(0.9),
+                        color: Colors.white.withValues(alpha: .92),
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -273,29 +369,18 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
                   if (widget.objective.statIds.length > 1)
                     const SizedBox(width: 6),
                   if (widget.objective.statIds.length > 1)
-                    const Icon(
-                      Icons.swap_horiz,
-                      size: 12,
-                      color: Colors.white38,
-                    ),
+                    const Icon(Icons.swap_horiz,
+                        size: 12, color: Colors.white38),
                   if (widget.objective.statIds.length > 1)
-                    Text(
-                      ' ${_statIndex + 1}/${widget.objective.statIds.length}',
-                      style: const TextStyle(
-                        fontSize: 10,
-                        color: Colors.white38,
-                      ),
-                    ),
+                    const Text('  ', style: TextStyle(fontSize: 10)),
                 ],
               ),
               const SizedBox(height: 4),
-
-              // Wrap-aware animated progress bar
               Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(
-                    color: color.withOpacity(0.55),
+                    color: color.withValues(alpha: .55),
                     width: 0.7,
                   ),
                 ),
@@ -312,8 +397,6 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
                 ),
               ),
               const SizedBox(height: 3),
-
-              // Tiny numbers: this-level progress (matches bar)
               MiniXpNumbers(
                 level: level,
                 step: stepInt,
@@ -329,9 +412,6 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
   }
 
   Widget _titleBlock({required bool showAmountLine}) {
-    final bool isTally = _isTally(widget.objective.type);
-    final bool isStopwatch = _isStopwatch(widget.objective.type);
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -346,31 +426,21 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
         ),
         if (showAmountLine && widget.objective.targetAmount > 1) ...[
           const SizedBox(height: 4),
-          (isTally || isStopwatch)
-              ? Selector<ObjectiveProvider, int>(
-                  selector: (ctx, p) {
-                    final list = p.getObjectivesForDay(widget.selectedDate);
-                    final idx = list.indexWhere(
-                      (o) => o.id == widget.objective.id,
-                    );
-                    final obj = idx == -1 ? widget.objective : list[idx];
-                    return obj.getCompletedAmount(widget.selectedDate);
-                  },
-                  builder: (_, amount, __) => Text(
-                    "$amount / ${widget.objective.targetAmount}",
-                    style: const TextStyle(
-                      color: Colors.white54,
-                      fontSize: ObjectiveTokens.kMicroSize,
-                    ),
-                  ),
-                )
-              : Text(
-                  "${widget.objective.completedAmount} / ${widget.objective.targetAmount}",
-                  style: const TextStyle(
-                    color: Colors.white54,
-                    fontSize: ObjectiveTokens.kMicroSize,
-                  ),
-                ),
+          Selector<ObjectiveProvider, int>(
+            selector: (ctx, p) {
+              final list = p.getObjectivesForDay(widget.selectedDate);
+              final idx = list.indexWhere((o) => o.id == widget.objective.id);
+              final obj = idx == -1 ? widget.objective : list[idx];
+              return obj.getCompletedAmount(widget.selectedDate);
+            },
+            builder: (_, amount, __) => Text(
+              "$amount / ${widget.objective.targetAmount}",
+              style: const TextStyle(
+                color: Colors.white54,
+                fontSize: ObjectiveTokens.kMicroSize,
+              ),
+            ),
+          ),
         ],
       ],
     );
@@ -380,8 +450,10 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF2A2A2D),
-        borderRadius: BorderRadius.circular(8),
+        color: kObjectiveCardBg,
+        borderRadius: BorderRadius.circular(10),
+        border:
+            Border.all(color: Colors.white.withValues(alpha: .10), width: 1),
       ),
       child: Row(
         children: [
@@ -399,19 +471,18 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
             ),
           ),
           if (widget.objective.lockedReason != null)
-            const Tooltip(
-              message: '',
-              child: Icon(Icons.info_outline, size: 14, color: Colors.grey),
+            Tooltip(
+              message: widget.objective.lockedReason!,
+              child:
+                  const Icon(Icons.info_outline, size: 14, color: Colors.grey),
             ),
         ],
       ),
     );
   }
 
-  // Capture BEFORE/AFTER XP, show overlay, dispatch notification
+  // Standard row (anchored confetti + SFX ONLY on user-initiated rising edge)
   Widget _standardRow(ObjectiveProvider provider, {required bool showCheck}) {
-    final isCompleted = widget.objective.isCompleted;
-
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -420,42 +491,100 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
         ),
         if (showCheck) ...[
           const SizedBox(width: 8),
-          CompleteButton(
-            isCompleted: isCompleted,
-            onToggle: () {
-              // 1) capture BEFORE xp
-              final catName = _primaryCategoryName(); // null => TOTAL
-              final before = _lookupCategoryXp(provider, catName);
+          Selector<ObjectiveProvider, bool>(
+            selector: (_, p) => _liveObjective(p).isCompleted,
+            builder: (_, isCompleted, __) {
+              // Fire effects ONLY when:
+              // 1) completion just turned true (rising edge), AND
+              // 2) the user armed this card (they tapped the check).
+              final playEffects = _armCompleteEffects &&
+                  isCompleted &&
+                  (_prevCompletedForCheck == false);
 
-              // 2) toggle completion (updates provider)
-              provider.toggleObjectiveCompletion(
-                widget.selectedDate,
-                widget.objective.id,
-              );
+              if (playEffects) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  _Sfx.instance.playComplete();
+                  _armCompleteEffects = false; // consume the latch
+                });
+              }
 
-              // 3) after provider rebuild, read AFTER xp and trigger UI
+              // Always re-baseline after the frame
               WidgetsBinding.instance.addPostFrameCallback((_) {
-                final after = _lookupCategoryXp(
-                  context.read<ObjectiveProvider>(),
-                  catName,
-                );
-                if (after > before) {
-                  // a) transient bottom overlay with counting progress
-                  xpoverlay.XpGainBottomBar.show(
-                    context,
-                    label: (catName ?? 'TOTAL').toUpperCase(),
-                    fromXp: before,
-                    toXp: after,
-                    color: _catColor(catName),
-                  );
-                  // b) notify screen-level listener to jump + animate the persistent bar
-                  XpBarJumpNotification(
-                    categoryName: catName,
-                    fromXp: before,
-                    toXp: after,
-                  ).dispatch(context);
-                }
+                _prevCompletedForCheck = isCompleted;
               });
+
+              return SizedBox(
+                width: 40,
+                height: 40,
+                child: Stack(
+                  alignment: Alignment.center,
+                  clipBehavior: Clip.none,
+                  children: [
+                    CompleteButton(
+                      isCompleted: isCompleted,
+                      onToggle: () {
+                        HapticFeedback.selectionClick();
+
+                        // Arm effects for THIS user action
+                        _armCompleteEffects = true;
+
+                        final catName = _primaryCategoryName(); // null => TOTAL
+                        final before = _lookupCategoryXp(provider, catName);
+
+                        provider.toggleObjectiveCompletion(
+                          widget.selectedDate,
+                          widget.objective.id,
+                        );
+
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          final after = _lookupCategoryXp(
+                            context.read<ObjectiveProvider>(),
+                            catName,
+                          );
+                          if (after > before) {
+                            xpoverlay.XpGainBottomBar.show(
+                              context,
+                              label: (catName ?? 'TOTAL').toUpperCase(),
+                              fromXp: before,
+                              toXp: after,
+                              color: _catColor(catName),
+                            );
+                            XpBarJumpNotification(
+                              categoryName: catName,
+                              fromXp: before,
+                              toXp: after,
+                            ).dispatch(context);
+                          }
+                        });
+                      },
+                    ),
+
+                    // 🎉 Anchored confetti plays only when playEffects == true
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: OverflowBox(
+                          minWidth: 0,
+                          minHeight: 0,
+                          maxWidth: _kCheckConfettiSize,
+                          maxHeight: _kCheckConfettiSize,
+                          child: Center(
+                            child: SizedBox(
+                              width: _kCheckConfettiSize,
+                              height: _kCheckConfettiSize,
+                              child: LottieOnce(
+                                asset: 'assets/lottie/confetti.json',
+                                play: playEffects,
+                                repeat: false,
+                                fit: BoxFit.contain,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
             },
           ),
         ],
@@ -490,7 +619,7 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
     );
   }
 
-  /// Reactive tally row
+  /// Reactive tally row (only plays when YOU increment to target)
   Widget _tallyRow() {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -509,7 +638,7 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
               amount: amount,
               min: 0,
               max: 1 << 31,
-              target: widget.objective.targetAmount, // ⬅️ ensure target effects
+              target: widget.objective.targetAmount,
               rowHeight: ObjectiveTokens.kRowHeight,
               numberFontSize: ObjectiveTokens.kStepperNumber,
               radius: 18,
@@ -520,6 +649,49 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
                   widget.objective.id,
                   next,
                 );
+
+                // Only when the user *just* reached target, mark complete + effects.
+                final live = _liveObjective(p);
+                final reached = next >= widget.objective.targetAmount;
+                if (reached && !live.isCompleted) {
+                  _armCompleteEffects = true; // arm for this user action
+
+                  final catName = _primaryCategoryName();
+                  final before = _lookupCategoryXp(p, catName);
+
+                  p.toggleObjectiveCompletion(
+                    widget.selectedDate,
+                    widget.objective.id,
+                  );
+
+                  // Center confetti + stacked chime (immediate, not via builder)
+                  _showConfettiOverlay(context);
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    _Sfx.instance.playComplete();
+                    _armCompleteEffects = false; // consume latch
+                  });
+
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    final after = _lookupCategoryXp(
+                      context.read<ObjectiveProvider>(),
+                      catName,
+                    );
+                    if (after > before) {
+                      xpoverlay.XpGainBottomBar.show(
+                        context,
+                        label: (catName ?? 'TOTAL').toUpperCase(),
+                        fromXp: before,
+                        toXp: after,
+                        color: _catColor(catName),
+                      );
+                      XpBarJumpNotification(
+                        categoryName: catName,
+                        fromXp: before,
+                        toXp: after,
+                      ).dispatch(context);
+                    }
+                  });
+                }
               },
             );
           },
@@ -554,10 +726,8 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
         if (showXp && showStats)
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 6),
-            child: Text(
-              "•",
-              style: TextStyle(color: Colors.grey, fontSize: 12),
-            ),
+            child:
+                Text("•", style: TextStyle(color: Colors.grey, fontSize: 12)),
           ),
         if (showStats)
           Expanded(
@@ -605,7 +775,7 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
   }
 
   void _openStopwatchSheet(BuildContext context, ObjectiveProvider provider) {
-    showModalBottomSheet(
+    showModalBottomSheet<void>(
       context: context,
       backgroundColor: const Color(0xFF101014),
       shape: const RoundedRectangleBorder(
@@ -619,7 +789,7 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
           final idx = list.indexWhere((o) => o.id == widget.objective.id);
           final live = idx == -1 ? widget.objective : list[idx];
           final current = live.getCompletedAmount(widget.selectedDate);
-          final newAmount = current + m; // allow going over target
+          final newAmount = current + m;
           provider.updateObjectiveAmountForDate(
             widget.selectedDate,
             widget.objective.id,
@@ -627,16 +797,26 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
           );
         },
         onMarkComplete: () {
-          // BEFORE XP from parent helpers
+          // Arm for this user intent.
+          _armCompleteEffects = true;
+
           final catName = _primaryCategoryName();
           final before = _lookupCategoryXp(provider, catName);
 
-          if (!widget.objective.isCompleted) {
+          final live = _liveObjective(provider);
+          if (!live.isCompleted) {
             provider.toggleObjectiveCompletion(
               widget.selectedDate,
               widget.objective.id,
             );
           }
+
+          // Immediate effects here (not via builder)
+          _showConfettiOverlay(context);
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _Sfx.instance.playComplete();
+            _armCompleteEffects = false;
+          });
 
           WidgetsBinding.instance.addPostFrameCallback((_) {
             final p2 = context.read<ObjectiveProvider>();

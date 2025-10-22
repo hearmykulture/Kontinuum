@@ -1,7 +1,6 @@
 // lib/ui/widgets/mission_card.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:auto_size_text/auto_size_text.dart';
 
 import 'package:kontinuum/models/mission.dart';
 import 'package:kontinuum/providers/mission_provider.dart';
@@ -56,34 +55,59 @@ class _MissionCardState extends State<MissionCard>
   Widget build(BuildContext context) {
     final mission = widget.mission;
 
-    final missionProvider = Provider.of<MissionProvider>(
-      context,
-      listen: false,
-    );
-    final objectiveProvider = Provider.of<ObjectiveProvider>(
-      context,
-      listen: false,
-    );
+    // Read-only providers (don’t subscribe whole card)
+    final missionProvider =
+        Provider.of<MissionProvider>(context, listen: false);
+    final objectiveProvider =
+        Provider.of<ObjectiveProvider>(context, listen: false);
 
     final rarityColor = _getRarityColor(mission);
     final isAccepted = mission.isAccepted && !mission.isCompleted;
 
     // ✅ Border switches to green when accepted
-    final Color borderColor = isAccepted
-        ? Colors.greenAccent
-        : rarityColor.withAlpha(179);
+    final Color borderColor =
+        isAccepted ? Colors.greenAccent : rarityColor.withAlpha(179);
     final double borderWidth = isAccepted ? 2.2 : 1.6;
+
+    // Cheaper glow per rarity
+    double blurForRarity;
+    switch (mission.rarity) {
+      case MissionRarity.common:
+        blurForRarity = 0; // no glow for common
+        break;
+      case MissionRarity.rare:
+        blurForRarity = 6;
+        break;
+      case MissionRarity.legendary:
+        blurForRarity = 9;
+        break;
+    }
+
     final BoxShadow borderGlow = BoxShadow(
       color: (isAccepted ? Colors.greenAccent : rarityColor).withAlpha(77),
-      blurRadius: switch (mission.rarity) {
-        MissionRarity.common => 2,
-        MissionRarity.rare => 10,
-        MissionRarity.legendary => 14,
-      },
+      blurRadius: blurForRarity,
     );
 
     return Hero(
       tag: mission.id,
+      // Tiny, cheap in-flight hero to avoid moving the whole card layer
+      flightShuttleBuilder: (ctx, anim, direction, fromCtx, toCtx) =>
+          AnimatedBuilder(
+        animation: anim,
+        builder: (_, __) => Opacity(
+          opacity: Curves.easeOut.transform(anim.value),
+          child: Container(
+            width: 120,
+            height: 70,
+            decoration: BoxDecoration(
+              color: const Color(0xFF161925),
+              borderRadius: BorderRadius.circular(12),
+              border:
+                  Border.all(color: rarityColor.withOpacity(0.5), width: 1.2),
+            ),
+          ),
+        ),
+      ),
       child: GestureDetector(
         onTap: () {
           Navigator.of(context).push(
@@ -126,21 +150,18 @@ class _MissionCardState extends State<MissionCard>
                               Builder(
                                 builder: (context) {
                                   final categoryId = mission.categoryIds.first;
-                                  final xp = objectiveProvider.getCategoryXp(
-                                    categoryId,
-                                  );
+                                  final xp = objectiveProvider
+                                      .getCategoryXp(categoryId);
                                   final level =
                                       LevelUtils.getCategoryLevelFromXp(xp);
-                                  final prestige = LevelUtils.getPrestigeTitle(
-                                    level,
-                                  );
+                                  final prestige =
+                                      LevelUtils.getPrestigeTitle(level);
                                   final isRookie = level < 10;
                                   final displayNumeral = isRookie
                                       ? ''
                                       : " ${prestige.title.split(' ').last}";
-                                  final prestigeColor = _getPrestigeColor(
-                                    prestige.color,
-                                  );
+                                  final prestigeColor =
+                                      _getPrestigeColor(prestige.color);
 
                                   return Padding(
                                     padding: const EdgeInsets.only(top: 2.0),
@@ -158,27 +179,20 @@ class _MissionCardState extends State<MissionCard>
                                 },
                               ),
                             const SizedBox(height: 4),
+                            // ⬇️ Cheaper than AutoSizeText (fixed size + 3 lines)
                             SizedBox(
                               height: 48,
                               child: Center(
-                                child: AutoSizeText(
+                                child: Text(
                                   mission.title,
                                   textAlign: TextAlign.center,
                                   maxLines: 3,
-                                  minFontSize: 9.5,
-                                  stepGranularity: 0.5,
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
                                     fontSize: 13,
                                     fontWeight: FontWeight.bold,
                                     color: rarityColor,
                                     height: 1.15,
-                                    shadows: [
-                                      Shadow(
-                                        color: rarityColor.withAlpha(102),
-                                        blurRadius: 4,
-                                      ),
-                                    ],
                                   ),
                                 ),
                               ),
@@ -209,10 +223,8 @@ class _MissionCardState extends State<MissionCard>
                                 color: Colors.deepPurpleAccent.withOpacity(0.6),
                                 borderRadius: BorderRadius.circular(6),
                               ),
-                              child: const Text(
-                                "🧠",
-                                style: TextStyle(fontSize: 12),
-                              ),
+                              child: const Text("🧠",
+                                  style: TextStyle(fontSize: 12)),
                             ),
                           ),
                       ],
@@ -234,10 +246,7 @@ class _MissionCardState extends State<MissionCard>
                       );
                     },
                     child: _buildActionButtons(
-                      mission,
-                      missionProvider,
-                      objectiveProvider,
-                    ),
+                        mission, missionProvider, objectiveProvider),
                   ),
                 ],
               ),
@@ -266,11 +275,8 @@ class _MissionCardState extends State<MissionCard>
       return IconButton(
         key: const ValueKey('accept'),
         tooltip: "Accept",
-        icon: Icon(
-          Icons.check_circle_outline,
-          color: Colors.black,
-          size: _kIconSize,
-        ),
+        icon: Icon(Icons.check_circle_outline,
+            color: Colors.black, size: _kIconSize),
         visualDensity: VisualDensity.compact,
         style: IconButton.styleFrom(
           backgroundColor: _getRarityColor(mission),
@@ -283,8 +289,7 @@ class _MissionCardState extends State<MissionCard>
                 if (provider.acceptedMissions.length >= 3) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content: Text("You can only accept 3 missions."),
-                    ),
+                        content: Text("You can only accept 3 missions.")),
                   );
                 } else {
                   setState(() => _isProcessing = true);
@@ -319,7 +324,7 @@ class _MissionCardState extends State<MissionCard>
 
                   // Capture XP BEFORE mutating provider so overlay animates from -> to
                   String label = "TOTAL";
-                  Color color = kTotalAccent; // ⬅️ was amber
+                  Color color = kTotalAccent;
                   int fromXp;
                   int toXp;
 
@@ -399,26 +404,28 @@ class _MissionCardState extends State<MissionCard>
   }
 
   Color _getPrestigeColor(String colorName) {
-    return switch (colorName.toLowerCase()) {
-      'gray' => Colors.grey,
-      'white' => Colors.white,
-      'gold' => Colors.amberAccent,
-      'aqua' => Colors.cyanAccent,
-      'green' => Colors.greenAccent,
-      'blue' => Colors.blueAccent,
-      'red' => Colors.redAccent,
-      'purple' => Colors.deepPurpleAccent,
-      'pink' => Colors.pinkAccent,
-      'rainbow' => Colors.tealAccent,
-      _ => Colors.white60,
-    };
+    final c = colorName.toLowerCase();
+    if (c == 'gray') return Colors.grey;
+    if (c == 'white') return Colors.white;
+    if (c == 'gold') return Colors.amberAccent;
+    if (c == 'aqua') return Colors.cyanAccent;
+    if (c == 'green') return Colors.greenAccent;
+    if (c == 'blue') return Colors.blueAccent;
+    if (c == 'red') return Colors.redAccent;
+    if (c == 'purple') return Colors.deepPurpleAccent;
+    if (c == 'pink') return Colors.pinkAccent;
+    if (c == 'rainbow') return Colors.tealAccent;
+    return Colors.white60;
   }
 
   Color _getRarityColor(Mission mission) {
-    return switch (mission.rarity) {
-      MissionRarity.common => Colors.grey[300]!,
-      MissionRarity.rare => Colors.cyanAccent,
-      MissionRarity.legendary => Colors.deepPurpleAccent,
-    };
+    switch (mission.rarity) {
+      case MissionRarity.common:
+        return Colors.grey[300]!;
+      case MissionRarity.rare:
+        return Colors.cyanAccent;
+      case MissionRarity.legendary:
+        return Colors.deepPurpleAccent;
+    }
   }
 }

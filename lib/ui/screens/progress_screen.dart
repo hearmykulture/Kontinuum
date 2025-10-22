@@ -1,4 +1,5 @@
 // lib/ui/screens/progress_screen.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -10,16 +11,31 @@ import 'package:kontinuum/ui/widgets/xp_level_bar.dart';
 import 'package:kontinuum/ui/screens/stats_dashboard.dart';
 import 'package:kontinuum/ui/screens/mission_board_screen.dart';
 import 'package:kontinuum/ui/objective_type_handlers/objective_type_factory.dart';
-import 'package:kontinuum/ui/screens/project_screen.dart'; // ⬅️ fixed import
 import 'package:kontinuum/ui/widgets/add_item_fab.dart';
-
-// ⬇️ calendar screen for swipe-down (appears from top)
 import 'package:kontinuum/ui/widgets/calendar/calendar_fullscreen_page.dart';
+import 'package:kontinuum/providers/mission_provider.dart';
 
-// Optional screens for the FAB drawer:
-import 'package:kontinuum/ui/screens/budget/budget_screen.dart';
-// If your writing editor has a different widget/route, update this import/usage.
-import 'package:kontinuum/ui/writing_editor/block_text_editor.dart';
+// NEW: Budget + Health + Level utils
+import 'package:kontinuum/ui/screens/budget/budget_screen_v2.dart';
+import 'package:kontinuum/ui/screens/health/health_screen.dart';
+import 'package:kontinuum/data/level_utils.dart';
+
+/// ===== Color palette: BLACK + BLUE-BLACK =====
+class AppPalette {
+  static const bg = Color(0xFF0A0A0B); // near-black (page background)
+  static const surface = Color(0xFF0E1320); // blue-black (pills/surfaces)
+  static const outline = Color(0xFF273043); // cool gray-blue stroke
+  static const onSurface = Color(0xFFF5F7FA); // crisp light text
+  static const subtext = Color(0xFF9AA4B2); // subdued cool text
+
+  // Requested purple for the Add button (#2B124C)
+  static const addPurple = Color(0xFF481a53);
+}
+
+// App backdrop
+const Color kProgressBg = AppPalette.bg;
+// Category header pill
+const Color kCategoryPillColor = AppPalette.surface;
 
 class ProgressScreen extends StatefulWidget {
   const ProgressScreen({super.key});
@@ -32,17 +48,8 @@ class _ProgressScreenState extends State<ProgressScreen>
     with TickerProviderStateMixin {
   final Map<String, bool> _expandedCategories = {};
 
-  // ---- Organize mode ----
-  bool _organizeMode = false;
-  List<String> _categoryOrder = [];
-
-  // ---- Right-side mini drawer state ----
-  late final AnimationController _fabCtrl;
-  bool _fabOpen = false;
-
   // ---- Horizontal "scroll over" between Progress ↔ Mission Board ----
   late final PageController _pageCtrl;
-  // With reversed PageView, index 0 = rightmost, index 1 = leftmost
   int _pageIndex = 0; // start on Progress (right)
 
   // Leave space so list content never hides behind the XP bar.
@@ -59,14 +66,12 @@ class _ProgressScreenState extends State<ProgressScreen>
   late final AnimationController _statsSlideCtrl; // 0 = hidden, 1 = shown
   double? _statsDragStartGlobalY;
 
+  // ---- GPU prepaint warm-up ----
+  bool _prepaintProgress = false;
+
   @override
   void initState() {
     super.initState();
-    _fabCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 280),
-      reverseDuration: const Duration(milliseconds: 200),
-    );
     _pageCtrl = PageController(initialPage: 0);
 
     _statsSlideCtrl = AnimationController(
@@ -75,25 +80,29 @@ class _ProgressScreenState extends State<ProgressScreen>
       reverseDuration: const Duration(milliseconds: 280),
       value: 0.0,
     );
+
+    // Warm up MissionProvider so the board is ready before sliding in.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final missionProvider = context.read<MissionProvider>();
+      final objectiveProvider = context.read<ObjectiveProvider>();
+      missionProvider.attachObjectiveProvider(objectiveProvider);
+      () async {
+        try {
+          await missionProvider.seedIfEmpty();
+          await missionProvider.syncWithSeeder();
+          missionProvider.ensureMissionSlotsFilled();
+        } catch (_) {
+          // ignore warm-up failures
+        }
+      }();
+    });
   }
 
   @override
   void dispose() {
-    _fabCtrl.dispose();
     _pageCtrl.dispose();
     _statsSlideCtrl.dispose();
     super.dispose();
-  }
-
-  void _toggleFab({bool? open}) {
-    setState(() {
-      _fabOpen = open ?? !_fabOpen;
-      if (_fabOpen) {
-        _fabCtrl.forward();
-      } else {
-        _fabCtrl.reverse();
-      }
-    });
   }
 
   Future<void> _goToBoard() async {
@@ -122,7 +131,7 @@ class _ProgressScreenState extends State<ProgressScreen>
     final last = DateTime(selected.year + 5, 12, 31);
 
     await Navigator.of(context).push(
-      PageRouteBuilder(
+      PageRouteBuilder<void>(
         transitionDuration: const Duration(milliseconds: 360),
         pageBuilder: (_, __, ___) => FullscreenCalendarPage(
           initialDate: selected,
@@ -158,20 +167,20 @@ class _ProgressScreenState extends State<ProgressScreen>
     return await showDialog<bool>(
           context: context,
           builder: (_) => AlertDialog(
-            backgroundColor: const Color(0xFF1E1E1E),
+            backgroundColor: kProgressBg,
             title: const Text(
               'Delete objective?',
-              style: TextStyle(color: Colors.white),
+              style: TextStyle(color: AppPalette.onSurface),
             ),
             content: Text(
               '“$title” will be permanently removed.',
-              style: const TextStyle(color: Colors.white70),
+              style: const TextStyle(color: AppPalette.subtext),
             ),
             actions: [
               TextButton(
                 child: const Text(
                   'Cancel',
-                  style: TextStyle(color: Colors.white70),
+                  style: TextStyle(color: AppPalette.subtext),
                 ),
                 onPressed: () => Navigator.pop(context, false),
               ),
@@ -195,20 +204,20 @@ class _ProgressScreenState extends State<ProgressScreen>
     return await showDialog<bool>(
           context: context,
           builder: (_) => AlertDialog(
-            backgroundColor: const Color(0xFF1E1E1E),
+            backgroundColor: kProgressBg,
             title: const Text(
               'Delete category?',
-              style: TextStyle(color: Colors.white),
+              style: TextStyle(color: AppPalette.onSurface),
             ),
             content: Text(
               'All objectives in “$categoryId” will be uncategorized.\n\nThis cannot be undone.',
-              style: const TextStyle(color: Colors.white70),
+              style: const TextStyle(color: AppPalette.subtext),
             ),
             actions: [
               TextButton(
                 child: const Text(
                   'Cancel',
-                  style: TextStyle(color: Colors.white70),
+                  style: TextStyle(color: AppPalette.subtext),
                 ),
                 onPressed: () => Navigator.pop(context, false),
               ),
@@ -225,7 +234,7 @@ class _ProgressScreenState extends State<ProgressScreen>
         false;
   }
 
-  // ====== Dismissible objective row (normal mode) ======
+  // ====== Dismissible objective row ======
   Widget _buildDismissibleObjectiveRow({
     required BuildContext context,
     required ObjectiveProvider provider,
@@ -236,15 +245,14 @@ class _ProgressScreenState extends State<ProgressScreen>
 
     return _RightEdgeDismissible(
       dismissibleKey: ValueKey('obj_${obj.id}'),
-      enabled: !_organizeMode,
+      enabled: true,
       confirmDelete: () => _confirmDeleteObjective(context, obj.title),
       onDismissed: () async {
         await provider.deleteObjective(obj.id);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Objective “${obj.title}” deleted')),
-          );
-        }
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Objective deleted')),
+        );
       },
       buildSecondaryBackground: () => Container(
         margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -265,84 +273,68 @@ class _ProgressScreenState extends State<ProgressScreen>
         ),
       ),
       child: GestureDetector(
-        onTap: _organizeMode
-            ? null
-            : () {
-                final handlerWidget = handler.buildInputWidget(
-                  objective: obj,
-                  selectedDate: selectedDate,
-                  onToggleComplete: () {
-                    final p = provider;
-                    p.toggleObjectiveCompletion(selectedDate, obj.id);
-                    p.evaluateLocks(selectedDate);
-                    Navigator.of(context).pop();
-                  },
-                  onUpdateAmount: (newAmount) {
-                    final p = provider;
-                    p.updateObjectiveAmountForDate(
-                      selectedDate,
-                      obj.id,
-                      newAmount,
-                    );
-                    p.evaluateLocks(selectedDate);
-                    Navigator.of(context).pop();
-                  },
-                );
+        onTap: () {
+          final handlerWidget = handler.buildInputWidget(
+            objective: obj,
+            selectedDate: selectedDate,
+            onToggleComplete: () {
+              final p = provider;
+              p.toggleObjectiveCompletion(selectedDate, obj.id);
+              p.evaluateLocks(selectedDate);
+              Navigator.of(context).pop();
+            },
+            onUpdateAmount: (newAmount) {
+              final p = provider;
+              p.updateObjectiveAmountForDate(
+                selectedDate,
+                obj.id,
+                newAmount,
+              );
+              p.evaluateLocks(selectedDate);
+              Navigator.of(context).pop();
+            },
+          );
 
-                showModalBottomSheet(
-                  context: context,
-                  backgroundColor: Colors.grey[900],
-                  shape: const RoundedRectangleBorder(
-                    borderRadius: BorderRadius.vertical(
-                      top: Radius.circular(16),
-                    ),
-                  ),
-                  builder: (_) => Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: handlerWidget,
-                  ),
-                );
-              },
-        child: _organizeMode
-            ? _OrganizeObjectiveTile(objective: obj, onStartDrag: (_) {})
-            : ObjectiveListItem(objective: obj, selectedDate: selectedDate),
+          showModalBottomSheet<void>(
+            context: context,
+            backgroundColor: kProgressBg,
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.vertical(
+                top: Radius.circular(16),
+              ),
+            ),
+            builder: (_) => Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: handlerWidget,
+            ),
+          );
+        },
+        child: ObjectiveListItem(objective: obj, selectedDate: selectedDate),
       ),
     );
   }
 
-  // Keep category order in sync
-  void _syncCategoryOrder(Iterable<String> current) {
-    if (_categoryOrder.isEmpty) {
-      _categoryOrder = current.toList();
-      return;
-    }
-    final now = current.toList();
-    final next = <String>[];
-    for (final id in _categoryOrder) {
-      if (now.contains(id)) next.add(id);
-    }
-    for (final id in now) {
-      if (!next.contains(id)) next.add(id);
-    }
-    _categoryOrder = next;
-  }
-
-  // Footer with Add + Organize
+  // Footer with Add only (organize removed)
   Widget _footerButtons() {
+    final base = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const AddItemFab(),
-            const SizedBox(height: 12),
-            _OrganizeToggleButton(
-              isOn: _organizeMode,
-              onToggle: () => setState(() => _organizeMode = !_organizeMode),
+      child: Theme(
+        data: base.copyWith(
+          filledButtonTheme: FilledButtonThemeData(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppPalette.addPurple,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+              ),
+              shadowColor: Colors.black.withValues(alpha: .35),
+              elevation: 2,
             ),
-          ],
+          ),
         ),
+        child: const Center(child: AddItemFab()),
       ),
     );
   }
@@ -357,8 +349,7 @@ class _ProgressScreenState extends State<ProgressScreen>
     final box = context.findRenderObject() as RenderBox?;
     if (box == null) return;
     final height = box.size.height;
-    // Upward drag increases progress: 0 → 1
-    final dy = (_statsDragStartGlobalY! - d.globalPosition.dy); // up = +
+    final dy = _statsDragStartGlobalY! - d.globalPosition.dy; // up = +
     final delta = (dy / height).clamp(0.0, 1.0);
     _statsSlideCtrl.value = delta;
   }
@@ -386,6 +377,20 @@ class _ProgressScreenState extends State<ProgressScreen>
     );
   }
 
+  // ===== XP Debugger Bottom Sheet =====
+  Future<void> _openXpDebuggerSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: false,
+      useSafeArea: false,
+      barrierColor: Colors.black.withValues(alpha: .35),
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return const _CategoryXpDebugSheet();
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final provider = Provider.of<ObjectiveProvider>(context);
@@ -398,9 +403,8 @@ class _ProgressScreenState extends State<ProgressScreen>
 
     return PopScope(
       canPop: false,
-      onPopInvoked: (didPop) async {
+      onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
-        // Close stats first if open (even partially)
         if (_statsSlideCtrl.value > 0.01) {
           _closeStats();
           return;
@@ -409,50 +413,104 @@ class _ProgressScreenState extends State<ProgressScreen>
           await _goToProgress();
           return;
         }
-        // Close FAB drawer if open
-        if (_fabOpen) {
-          _toggleFab(open: false);
-          return;
-        }
-        // Allow system back if nothing to intercept
         if (mounted && Navigator.of(context).canPop()) {
           Navigator.of(context).pop();
         }
       },
       child: Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: kProgressBg,
         body: SafeArea(
           child: Stack(
             children: [
-              // ===== BASE: Progress layer (static; does NOT blend with stats)
               _buildProgressLayer(
                 provider: provider,
                 topEdgeHeight: topEdgeHeight,
               ),
-
-              // ===== TOP: Stats slides up from bottom (full-screen & opaque)
+              if (_prepaintProgress)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: TickerMode(
+                      enabled: false,
+                      child: Opacity(
+                        opacity: 0.001,
+                        child: const RepaintBoundary(
+                          child: _KeepAlive(
+                            child: _ProgressPageContent(),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               Positioned.fill(
                 child: AnimatedBuilder(
                   animation: _statsSlideCtrl,
                   builder: (context, _) {
                     final offset = Tween<Offset>(
-                      begin: const Offset(0, 1), // off-screen bottom
+                      begin: const Offset(0, 1),
                       end: Offset.zero,
                     ).transform(_statsSlideCtrl.value);
                     return Transform.translate(
                       offset: Offset(0, offset.dy * screenH),
                       child: IgnorePointer(
                         ignoring: _statsSlideCtrl.value == 0.0,
-                        child:
-                            const StatsDashboard(), // has its own Scaffold bg
+                        child: const StatsDashboard(),
                       ),
                     );
                   },
                 ),
               ),
-
-              // ===== Floating Action Button + Drawer =====
-              _buildFabDrawer(context, provider),
+            ],
+          ),
+        ),
+        floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+        floatingActionButton: Padding(
+          padding: const EdgeInsets.only(bottom: _listBottomInsetForXpBar - 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              // NEW: XP Debugger FAB → opens bottom sheet
+              FloatingActionButton(
+                heroTag: 'fab_to_xp_debug',
+                backgroundColor: const Color(0xFF7E57C2), // purple
+                foregroundColor: Colors.white,
+                tooltip: 'Open XP Debugger',
+                child: const Icon(Icons.science_outlined),
+                onPressed: _openXpDebuggerSheet,
+              ),
+              const SizedBox(height: 12),
+              // NEW: Health FAB
+              FloatingActionButton(
+                heroTag: 'fab_to_health',
+                backgroundColor: Colors.pinkAccent,
+                foregroundColor: Colors.white,
+                tooltip: 'Open Health',
+                child: const Icon(Icons.favorite),
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const HealthScreen(),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 12),
+              // Existing: Budget FAB
+              FloatingActionButton(
+                heroTag: 'fab_to_budget',
+                backgroundColor: const Color(0xFF26A69A), // teal accent is fine
+                foregroundColor: Colors.white,
+                tooltip: 'Open Budget',
+                child: const Icon(Icons.attach_money),
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const BudgetScreenV2(),
+                    ),
+                  );
+                },
+              ),
             ],
           ),
         ),
@@ -475,10 +533,30 @@ class _ProgressScreenState extends State<ProgressScreen>
             reverse: true, // board is LEFT, progress is RIGHT
             allowImplicitScrolling: true,
             physics: const PageScrollPhysics(parent: BouncingScrollPhysics()),
-            onPageChanged: (i) => setState(() => _pageIndex = i),
+            onPageChanged: (i) {
+              setState(() => _pageIndex = i);
+              if (i == 1) {
+                _prepaintProgress = true;
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  Future.delayed(const Duration(milliseconds: 16), () {
+                    if (mounted) setState(() => _prepaintProgress = false);
+                  });
+                });
+              }
+            },
             children: [
-              _buildProgressContent(provider),
-              const MissionBoardScreen(),
+              TickerMode(
+                enabled: _pageIndex == 0,
+                child: const RepaintBoundary(
+                  child: _KeepAlive(child: _ProgressPageContent()),
+                ),
+              ),
+              TickerMode(
+                enabled: _pageIndex == 1,
+                child: RepaintBoundary(
+                  child: MissionBoardScreen(isActive: _pageIndex == 1),
+                ),
+              ),
             ],
           ),
 
@@ -509,7 +587,7 @@ class _ProgressScreenState extends State<ProgressScreen>
             child: SizedBox(
               width: 40,
               child: GestureDetector(
-                behavior: HitTestBehavior.translucent, // let taps hit below
+                behavior: HitTestBehavior.translucent,
                 onHorizontalDragUpdate: (details) {
                   if (details.delta.dx < -8) _goToBoard();
                 },
@@ -523,7 +601,8 @@ class _ProgressScreenState extends State<ProgressScreen>
               top: -10,
               left: 8,
               child: IconButton(
-                icon: const Icon(Icons.flag_outlined, color: Colors.white),
+                icon: const Icon(Icons.flag_outlined,
+                    color: AppPalette.onSurface),
                 tooltip: 'Mission Board',
                 onPressed: _goToBoard,
               ),
@@ -533,8 +612,8 @@ class _ProgressScreenState extends State<ProgressScreen>
     );
   }
 
-  // ----- Progress content (original body) -----
-  Widget _buildProgressContent(ObjectiveProvider provider) {
+  // ----- Progress content (original body moved into an impl method) -----
+  Widget _buildProgressContentImpl(ObjectiveProvider provider) {
     return Stack(
       children: [
         ValueListenableBuilder<DateTime>(
@@ -542,6 +621,7 @@ class _ProgressScreenState extends State<ProgressScreen>
           builder: (context, selectedDate, _) {
             final objectives = provider.getObjectivesForDay(selectedDate);
 
+            // Group by first category (or "Uncategorized")
             final Map<String, List<Objective>> groupedByCategory = {};
             for (final obj in objectives) {
               final category = obj.categoryIds.isNotEmpty
@@ -550,14 +630,16 @@ class _ProgressScreenState extends State<ProgressScreen>
               groupedByCategory.putIfAbsent(category, () => []).add(obj);
             }
 
-            final catIds = groupedByCategory.keys;
-            _syncCategoryOrder(catIds);
+            // Order categories alphabetically, with "Uncategorized" at the end.
+            final orderedCats = groupedByCategory.keys.toList()
+              ..sort((a, b) {
+                if (a == 'Uncategorized' && b == 'Uncategorized') return 0;
+                if (a == 'Uncategorized') return 1;
+                if (b == 'Uncategorized') return -1;
+                return a.toLowerCase().compareTo(b.toLowerCase());
+              });
 
-            final orderedCats = _categoryOrder
-                .where((id) => groupedByCategory.containsKey(id))
-                .toList();
-
-            Widget header = Column(
+            final header = Column(
               children: [
                 Consumer<ObjectiveProvider>(
                   builder: (context, provider, _) {
@@ -577,33 +659,10 @@ class _ProgressScreenState extends State<ProgressScreen>
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
-                      color: Colors.white,
+                      color: AppPalette.onSurface,
                     ),
                   ),
                 ),
-                if (_organizeMode)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 8,
-                    ),
-                    child: Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: .06),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: Colors.white.withValues(alpha: .12),
-                        ),
-                      ),
-                      child: const Text(
-                        "Organize mode: drag ≡ to reorder categories.\n"
-                        "Long-press objectives to reorder within a category.\n"
-                        "Drag ⠿ onto another category header to move it.",
-                        style: TextStyle(color: Colors.white70, fontSize: 12),
-                      ),
-                    ),
-                  ),
               ],
             );
 
@@ -615,12 +674,11 @@ class _ProgressScreenState extends State<ProgressScreen>
                     child: Center(
                       child: Text(
                         "No objectives for this day",
-                        style: TextStyle(color: Colors.white70),
+                        style: TextStyle(color: AppPalette.subtext),
                       ),
                     ),
                   ),
                   _footerButtons(),
-                  // ⬇️ XP bar is the drag handle to open stats
                   GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onVerticalDragStart: _statsDragStart,
@@ -629,32 +687,24 @@ class _ProgressScreenState extends State<ProgressScreen>
                     onTap: _openStatsFully,
                     child: XpLevelBar(
                       controller: _xpBarCtrl,
-                      onStatsPressed: _openStatsFully, // shows & taps icon
+                      onStatsPressed: _openStatsFully,
                     ),
                   ),
                 ],
               );
             }
 
-            final list = _organizeMode
-                ? _buildReorderableCategoryList(
-                    orderedCats,
-                    groupedByCategory,
-                    provider,
-                    selectedDate,
-                  )
-                : _buildNormalCategoryList(
-                    orderedCats,
-                    groupedByCategory,
-                    provider,
-                    selectedDate,
-                  );
+            final list = _buildNormalCategoryList(
+              orderedCats,
+              groupedByCategory,
+              provider,
+              selectedDate,
+            );
 
             return Column(
               children: [
                 header,
                 Expanded(child: list),
-                // ⬇️ XP bar is the drag handle to open stats
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onVerticalDragStart: _statsDragStart,
@@ -663,7 +713,7 @@ class _ProgressScreenState extends State<ProgressScreen>
                   onTap: _openStatsFully,
                   child: XpLevelBar(
                     controller: _xpBarCtrl,
-                    onStatsPressed: _openStatsFully, // shows & taps icon
+                    onStatsPressed: _openStatsFully,
                   ),
                 ),
               ],
@@ -674,635 +724,91 @@ class _ProgressScreenState extends State<ProgressScreen>
     );
   }
 
-  // ===== Normal category list (no organize) =====
+  // ===== Normal category list (lazy builder) =====
   Widget _buildNormalCategoryList(
     List<String> orderedCats,
     Map<String, List<Objective>> groupedByCategory,
     ObjectiveProvider provider,
     DateTime selectedDate,
   ) {
-    final children = <Widget>[
-      for (final category in orderedCats)
-        _buildCategoryTile(
-          category,
-          groupedByCategory[category]!,
-          provider,
-          selectedDate,
-        ),
-    ];
-    children.addAll(const [SizedBox(height: 8)]);
-    children.add(_footerButtons());
-    children.add(const SizedBox(height: 4));
+    final itemCount = orderedCats.length + 3; // spacer + footer + spacer
 
-    return ListView(
+    return ListView.builder(
       padding: const EdgeInsets.only(bottom: _listBottomInsetForXpBar),
-      children: children,
-    );
-  }
+      cacheExtent: 800,
+      itemCount: itemCount,
+      itemBuilder: (context, index) {
+        if (index < orderedCats.length) {
+          final category = orderedCats[index];
+          final items = groupedByCategory[category]!;
+          final initiallyExpanded = _expandedCategories[category] ?? true;
 
-  Widget _buildCategoryTile(
-    String category,
-    List<Objective> items,
-    ObjectiveProvider provider,
-    DateTime selectedDate,
-  ) {
-    final isExpanded = _expandedCategories[category] ?? true;
-    final isUncategorized = category == 'Uncategorized';
-
-    return DragTarget<_ObjectiveDrag>(
-      onWillAcceptWithDetails: (_) => _organizeMode,
-      onAcceptWithDetails: (details) async {
-        if (!_organizeMode) return;
-        final data = details.data;
-        if (data.fromCategoryId == category) return;
-        await provider.moveObjectiveToCategory(
-          objectiveId: data.objectiveId,
-          newCategoryId: category,
-          date: selectedDate,
-        );
-        if (mounted) setState(() {});
-      },
-      builder: (context, _, __) {
-        return _RightEdgeDismissible(
-          dismissibleKey: ValueKey('cat_$category'),
-          enabled: !(_organizeMode || isUncategorized),
-          confirmDelete: () => _confirmDeleteCategory(context, category),
-          onDismissed: () async {
-            await provider.deleteCategory(category);
-            if (mounted) {
+          return _CategorySection(
+            key: ValueKey('cat_$category'),
+            category: category,
+            items: items,
+            initiallyExpanded: initiallyExpanded,
+            onExpandedChanged: (expanded) {
+              setState(() => _expandedCategories[category] = expanded);
+            },
+            canDismiss: category != 'Uncategorized',
+            confirmDelete: () => _confirmDeleteCategory(context, category),
+            onDeleted: () async {
+              await provider.deleteCategory(category);
+              if (!context.mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(content: Text('Category “$category” deleted')),
               );
-            }
-          },
-          buildSecondaryBackground: () => Container(
-            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            alignment: Alignment.centerRight,
-            decoration: BoxDecoration(
-              color: Colors.redAccent.withValues(alpha: .18),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.redAccent.withValues(alpha: .4)),
-            ),
-            child: const Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                Text('Delete', style: TextStyle(color: Colors.redAccent)),
-                SizedBox(width: 8),
-                Icon(Icons.delete_forever, color: Colors.redAccent),
-              ],
-            ),
-          ),
-          child: Theme(
-            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-            child: ExpansionTile(
-              title: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      "$category (${items.length})",
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              collapsedIconColor: Colors.white,
-              iconColor: Colors.white,
-              initiallyExpanded: isExpanded,
-              onExpansionChanged: (expanded) {
-                setState(() => _expandedCategories[category] = expanded);
-              },
-              children: items
-                  .map(
-                    (obj) => _buildDismissibleObjectiveRow(
-                      context: context,
-                      provider: provider,
-                      obj: obj,
-                      selectedDate: selectedDate,
-                    ),
-                  )
-                  .toList(),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  // ===== Organize: Reorderable categories =====
-  Widget _buildReorderableCategoryList(
-    List<String> orderedCats,
-    Map<String, List<Objective>> groupedByCategory,
-    ObjectiveProvider provider,
-    DateTime selectedDate,
-  ) {
-    return ReorderableListView(
-      padding: const EdgeInsets.only(bottom: _listBottomInsetForXpBar),
-      onReorder: (oldIndex, newIndex) {
-        setState(() {
-          if (newIndex > oldIndex) newIndex -= 1;
-          final moved = _categoryOrder.removeAt(oldIndex);
-          _categoryOrder.insert(newIndex, moved);
-        });
-      },
-      buildDefaultDragHandles: false,
-      children: [
-        for (int i = 0; i < orderedCats.length; i++)
-          ReorderableDragStartListener(
-            key: ValueKey('cat_reorder_${orderedCats[i]}'),
-            index: i,
-            child: DragTarget<_ObjectiveDrag>(
-              onWillAcceptWithDetails: (_) => true,
-              onAcceptWithDetails: (details) async {
-                final data = details.data;
-                if (data.fromCategoryId == orderedCats[i]) return;
-                await provider.moveObjectiveToCategory(
-                  objectiveId: data.objectiveId,
-                  newCategoryId: orderedCats[i],
-                  date: selectedDate,
-                );
-                if (mounted) setState(() {});
-              },
-              builder: (context, _, __) {
-                final category = orderedCats[i];
-                final items = groupedByCategory[category]!;
-                final isExpanded = _expandedCategories[category] ?? true;
-
-                return Container(
-                  margin: const EdgeInsets.symmetric(
-                    horizontal: 8.0,
-                    vertical: 4.0,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: .03),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: .08),
-                    ),
-                  ),
-                  child: Theme(
-                    data: Theme.of(
-                      context,
-                    ).copyWith(dividerColor: Colors.transparent),
-                    child: ExpansionTile(
-                      tilePadding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 4,
-                      ),
-                      title: Row(
-                        children: [
-                          const Icon(Icons.drag_handle, color: Colors.white54),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(
-                              "$category (${items.length})",
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      collapsedIconColor: Colors.white,
-                      iconColor: Colors.white,
-                      initiallyExpanded: isExpanded,
-                      onExpansionChanged: (expanded) {
-                        setState(
-                          () => _expandedCategories[category] = expanded,
-                        );
-                      },
-                      children: [
-                        ReorderableListView.builder(
-                          key: ValueKey('obj_list_$category'),
-                          shrinkWrap: true,
-                          physics: const NeverScrollableScrollPhysics(),
-                          itemCount: items.length,
-                          buildDefaultDragHandles: false,
-                          itemBuilder: (context, index) {
-                            final obj = items[index];
-                            return ReorderableDragStartListener(
-                              index: index,
-                              key: ValueKey('obj_${obj.id}_organize'),
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  border: Border(
-                                    top: BorderSide(
-                                      color: Colors.white.withValues(
-                                        alpha: .06,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                child: _OrganizeObjectiveTile(
-                                  objective: obj,
-                                  onStartDrag: (_) {},
-                                ),
-                              ),
-                            );
-                          },
-                          onReorder: (oldIndex, newIndex) async {
-                            final ids = items.map((o) => o.id).toList();
-                            if (newIndex > oldIndex) newIndex -= 1;
-                            final moved = ids.removeAt(oldIndex);
-                            ids.insert(newIndex, moved);
-                            await provider.reorderObjectivesInCategoryForDate(
-                              provider.selectedDateNotifier.value,
-                              category,
-                              ids,
-                            );
-                            if (mounted) setState(() {});
-                          },
-                        ),
-                        const SizedBox(height: 8),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-        Container(
-          key: const ValueKey('_footer_buttons'),
-          margin: const EdgeInsets.only(top: 8),
-          child: _footerButtons(),
-        ),
-      ],
-    );
-  }
-
-  void _showXpDebugDialog(BuildContext context, ObjectiveProvider provider) {
-    const coreCategories = [
-      'RAPPING',
-      'PRODUCTION',
-      'HEALTH',
-      'KNOWLEDGE',
-      'NETWORKING',
-    ];
-
-    for (final id in coreCategories) {
-      provider.ensureCategoryExists(id);
-    }
-
-    int selectedXp = 100;
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.black87,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    "🧪 XP Debugger",
-                    style: TextStyle(fontSize: 18, color: Colors.white),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    children: [10, 100, 1000].map((xp) {
-                      final isSelected = xp == selectedXp;
-                      return ChoiceChip(
-                        label: Text("+$xp XP"),
-                        selected: isSelected,
-                        labelStyle: TextStyle(
-                          color: isSelected ? Colors.black : Colors.white,
-                        ),
-                        selectedColor: Colors.orangeAccent,
-                        backgroundColor: Colors.grey[800],
-                        onSelected: (_) => setState(() => selectedXp = xp),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 16),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: coreCategories.map((id) {
-                      return ElevatedButton(
-                        onPressed: () =>
-                            provider.addXpToCategory(id, selectedXp),
-                        child: Text("+$selectedXp XP to $id"),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 12),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red,
-                    ),
-                    onPressed: () {
-                      provider.resetAllXp();
-                      provider.resetObjectiveCompletion();
-                    },
-                    child: const Text("Reset"),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  // ===== FAB Drawer overlay =====
-  Widget _buildFabDrawer(BuildContext context, ObjectiveProvider provider) {
-    // Keep the main FAB out of the XP bar's way.
-    const double bottomClearance = _listBottomInsetForXpBar - 24; // ~96
-    final media = MediaQuery.of(context);
-    final double bottom = bottomClearance + media.padding.bottom;
-
-    return Stack(
-      children: [
-        // Tap-out scrim
-        if (_fabOpen)
-          Positioned.fill(
-            child: GestureDetector(
-              onTap: () => _toggleFab(open: false),
-              child: Container(color: Colors.black.withValues(alpha: .35)),
-            ),
-          ),
-
-        // Drawer items (animate upward)
-        Positioned(
-          right: 16,
-          bottom: bottom + 56, // place items above the main FAB
-          child: IgnorePointer(
-            ignoring: !_fabOpen && _fabCtrl.status == AnimationStatus.dismissed,
-            child: SizedBox(
-              width: 56,
-              child: Stack(
-                alignment: Alignment.bottomRight,
-                children: [
-                  _AnimatedFabItem(
-                    controller: _fabCtrl,
-                    index: 1,
-                    color: const Color(0xFF26A69A), // teal
-                    icon: Icons.attach_money,
-                    tooltip: 'Budget Manager',
-                    hero: 'fab_budget',
-                    onPressed: () {
-                      _toggleFab(open: false);
-                      Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const BudgetScreen()),
-                      );
-                    },
-                  ),
-                  _AnimatedFabItem(
-                    controller: _fabCtrl,
-                    index: 2,
-                    color: const Color(0xFF42A5F5), // blue
-                    icon: Icons.dashboard_customize_outlined,
-                    tooltip: 'Project Manager',
-                    hero: 'fab_projects',
-                    onPressed: () {
-                      _toggleFab(open: false);
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const ProjectScreen(), // ⬅️ fixed
-                        ),
-                      );
-                    },
-                  ),
-                  _AnimatedFabItem(
-                    controller: _fabCtrl,
-                    index: 3,
-                    color: const Color(0xFF7E57C2), // purple
-                    icon: Icons.edit_note_rounded,
-                    tooltip: 'Writing Editor',
-                    hero: 'fab_writing',
-                    onPressed: () {
-                      _toggleFab(open: false);
-                      // Update the destination if your editor widget differs.
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const BlockTextEditor(),
-                        ),
-                      );
-                    },
-                  ),
-                  _AnimatedFabItem(
-                    controller: _fabCtrl,
-                    index: 4,
-                    color: const Color(0xFFFF7043), // orange
-                    icon: Icons.bug_report_outlined,
-                    tooltip: 'XP Debugger',
-                    hero: 'fab_xp_debug',
-                    onPressed: () {
-                      _toggleFab(open: false);
-                      _showXpDebugDialog(context, provider);
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-
-        // Main FAB
-        Positioned(
-          right: 16,
-          bottom: bottom,
-          child: FloatingActionButton(
-            heroTag: 'fab_main_more',
-            onPressed: () => _toggleFab(),
-            backgroundColor: const Color(0xFF6C63FF),
-            foregroundColor: Colors.white,
-            child: AnimatedRotation(
-              duration: const Duration(milliseconds: 200),
-              turns: _fabOpen ? 0.125 : 0.0, // 45°
-              child: const Icon(Icons.add),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// Small “pill” button used for Organize toggle in the footer
-class _OrganizeToggleButton extends StatelessWidget {
-  const _OrganizeToggleButton({required this.isOn, required this.onToggle});
-
-  final bool isOn;
-  final VoidCallback onToggle;
-
-  @override
-  Widget build(BuildContext context) {
-    return FloatingActionButton.extended(
-      heroTag: 'fab_organize',
-      onPressed: onToggle,
-      backgroundColor: const Color(0xFF6C63FF),
-      foregroundColor: Colors.white,
-      icon: Icon(isOn ? Icons.check : Icons.tune),
-      label: Text(isOn ? 'Done' : 'Organize'),
-    );
-  }
-}
-
-class _OrganizeObjectiveTile extends StatelessWidget {
-  const _OrganizeObjectiveTile({required this.objective, this.onStartDrag});
-
-  final Objective objective;
-  final void Function(_ObjectiveDrag)? onStartDrag;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      child: Row(
-        children: [
-          LongPressDraggable<_ObjectiveDrag>(
-            data: _ObjectiveDrag(
-              objectiveId: objective.id,
-              fromCategoryId: objective.categoryIds.isNotEmpty
-                  ? objective.categoryIds.first
-                  : 'Uncategorized',
-            ),
-            feedback: Material(
-              color: Colors.transparent,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: .12),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: .18),
-                  ),
-                ),
-                child: Text(
-                  objective.title,
-                  style: const TextStyle(color: Colors.white),
-                ),
-              ),
-            ),
-            childWhenDragging: const Opacity(
-              opacity: 0.4,
-              child: Icon(Icons.drag_indicator, color: Colors.white54),
-            ),
-            child: const Icon(Icons.drag_indicator, color: Colors.white54),
-            onDragStarted: () {
-              onStartDrag?.call(
-                _ObjectiveDrag(
-                  objectiveId: objective.id,
-                  fromCategoryId: objective.categoryIds.isNotEmpty
-                      ? objective.categoryIds.first
-                      : 'Uncategorized',
-                ),
-              );
             },
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              objective.title,
-              style: const TextStyle(color: Colors.white),
+            rowBuilder: (obj) => _buildDismissibleObjectiveRow(
+              context: context,
+              provider: provider,
+              obj: obj,
+              selectedDate: selectedDate,
             ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ObjectiveDrag {
-  final String objectiveId;
-  final String fromCategoryId;
-  _ObjectiveDrag({required this.objectiveId, required this.fromCategoryId});
-}
-
-class _AnimatedFabItem extends StatelessWidget {
-  const _AnimatedFabItem({
-    required this.controller,
-    required this.index,
-    required this.color,
-    required this.icon,
-    required this.tooltip,
-    required this.hero,
-    required this.onPressed,
-  });
-
-  final AnimationController controller;
-  final int index;
-  final Color color;
-  final IconData icon;
-  final String tooltip;
-  final String hero;
-  final VoidCallback onPressed;
-
-  static const double _btnSize = 56;
-  static const double _gap = 12;
-
-  @override
-  Widget build(BuildContext context) {
-    final double start = 0.05 + (4 - index) * 0.08;
-    final double end = (start + 0.55).clamp(0.0, 1.0);
-
-    final curvedMove = CurvedAnimation(
-      parent: controller,
-      curve: Interval(start, end, curve: Curves.easeOutBack),
-      reverseCurve: const Interval(0.0, 1.0, curve: Curves.easeInCubic),
-    );
-
-    final curvedFade = CurvedAnimation(
-      parent: controller,
-      curve: Interval(start, end, curve: Curves.easeOutCubic),
-      reverseCurve: const Interval(0.0, 1.0, curve: Curves.easeInCubic),
-    );
-
-    final dy = Tween<double>(
-      begin: 0,
-      end: -(_btnSize + _gap) * index,
-    ).animate(curvedMove);
-
-    final scale = Tween<double>(begin: 0.85, end: 1.0).animate(curvedMove);
-    final opacity = Tween<double>(begin: 0.0, end: 1.0).animate(curvedFade);
-
-    return AnimatedBuilder(
-      animation: controller,
-      builder: (_, __) {
-        return Transform.translate(
-          offset: Offset(0, dy.value),
-          child: Opacity(
-            opacity: opacity.value.clamp(0.0, 1.0),
-            child: Transform.scale(
-              scale: scale.value,
-              alignment: Alignment.center,
-              child: IgnorePointer(
-                ignoring: controller.status == AnimationStatus.dismissed,
-                child: FloatingActionButton(
-                  heroTag: hero,
-                  tooltip: tooltip,
-                  onPressed: onPressed,
-                  backgroundColor: color,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Icon(icon),
-                ),
-              ),
-            ),
-          ),
-        );
+          );
+        }
+        if (index == orderedCats.length) return const SizedBox(height: 8);
+        if (index == orderedCats.length + 1) return _footerButtons();
+        return const SizedBox(height: 4);
       },
     );
   }
 }
+
+// ===================== KeepAlive wrapper =====================
+class _KeepAlive extends StatefulWidget {
+  const _KeepAlive({required this.child});
+  final Widget child;
+  @override
+  State<_KeepAlive> createState() => _KeepAliveState();
+}
+
+class _KeepAliveState extends State<_KeepAlive>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return widget.child;
+  }
+}
+
+// A lightweight wrapper to keep the content page as a separate subtree.
+class _ProgressPageContent extends StatelessWidget {
+  const _ProgressPageContent();
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = Provider.of<ObjectiveProvider>(context, listen: false);
+    final state = context.findAncestorStateOfType<_ProgressScreenState>();
+    if (state == null) return const SizedBox.shrink();
+    return state._buildProgressContentImpl(provider);
+  }
+}
+
+// ===== Helpers / dismissible =====
 
 /// Dismiss only if drag starts on the RIGHT edge then swipes LEFT
 class _RightEdgeDismissible extends StatefulWidget {
@@ -1366,5 +872,483 @@ class _RightEdgeDismissibleState extends State<_RightEdgeDismissible> {
         child: widget.child,
       ),
     );
+  }
+}
+
+// ============ Category section with instant, reliable expand/collapse ============
+class _CategorySection extends StatefulWidget {
+  const _CategorySection({
+    super.key,
+    required this.category,
+    required this.items,
+    required this.initiallyExpanded,
+    required this.onExpandedChanged,
+    required this.canDismiss,
+    required this.confirmDelete,
+    required this.onDeleted,
+    required this.rowBuilder,
+  });
+
+  final String category;
+  final List<Objective> items;
+  final bool initiallyExpanded;
+  final ValueChanged<bool> onExpandedChanged;
+
+  final bool canDismiss;
+  final Future<bool> Function() confirmDelete;
+  final Future<void> Function() onDeleted;
+
+  // Build a single objective row (uses parent’s helper)
+  final Widget Function(Objective obj) rowBuilder;
+
+  @override
+  State<_CategorySection> createState() => _CategorySectionState();
+}
+
+class _CategorySectionState extends State<_CategorySection>
+    with SingleTickerProviderStateMixin, AutomaticKeepAliveClientMixin {
+  late final AnimationController _ctrl;
+  late bool _expanded;
+
+  @override
+  void initState() {
+    super.initState();
+    _expanded = widget.initiallyExpanded;
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+      value: _expanded ? 1.0 : 0.0,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _CategorySection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // If external state changed (e.g., persisted expansion), sync animation.
+    if (oldWidget.initiallyExpanded != widget.initiallyExpanded &&
+        widget.initiallyExpanded != _expanded) {
+      _expanded = widget.initiallyExpanded;
+      _ctrl.animateTo(
+        _expanded ? 1.0 : 0.0,
+        curve: Curves.easeOutCubic,
+        duration: const Duration(milliseconds: 220),
+      );
+    }
+  }
+
+  void _toggle() {
+    setState(() => _expanded = !_expanded);
+    widget.onExpandedChanged(_expanded);
+    _ctrl.animateTo(
+      _expanded ? 1.0 : 0.0,
+      curve: Curves.easeOutCubic,
+      duration: const Duration(milliseconds: 220),
+    );
+  }
+
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+
+    final header = Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(18),
+        child: InkWell(
+          onTap: _toggle,
+          borderRadius: BorderRadius.circular(18),
+          child: Ink(
+            decoration: BoxDecoration(
+              color: kCategoryPillColor,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: AppPalette.outline.withValues(alpha: .28),
+                width: 1,
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              child: Row(
+                children: [
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      "${widget.category} (${widget.items.length})",
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: AppPalette.onSurface,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 44,
+                    height: 44,
+                    child: IconButton(
+                      padding: EdgeInsets.zero,
+                      splashRadius: 22,
+                      tooltip: _expanded ? 'Collapse' : 'Expand',
+                      onPressed: _toggle,
+                      icon: RotationTransition(
+                        turns: Tween<double>(begin: 0.0, end: 0.5)
+                            .animate(CurvedAnimation(
+                          parent: _ctrl,
+                          curve: Curves.easeOutCubic,
+                        )),
+                        child: const Icon(Icons.expand_more,
+                            color: AppPalette.onSurface),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    // Body stays in the tree ALWAYS. We animate height via heightFactor
+    // and disable pointers when collapsed. Background changed to BLACK/transparent.
+    final body = Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+      child: AnimatedBuilder(
+        animation: _ctrl,
+        child: Column(
+          children: [
+            const SizedBox(height: 6),
+            for (final obj in widget.items) widget.rowBuilder(obj),
+            const SizedBox(height: 6),
+          ],
+        ),
+        builder: (context, child) {
+          final t = CurvedAnimation(
+            parent: _ctrl,
+            curve: Curves.easeOutCubic,
+          ).value;
+          return Container(
+            decoration: BoxDecoration(
+              // 👇 was kCategoryPillColor; now invisible on page background
+              color: Colors.transparent, // or kProgressBg for solid black
+              borderRadius: BorderRadius.circular(14),
+              // remove outline while expanded/collapsed to keep it invisible
+              border: Border.all(color: Colors.transparent, width: 0),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: ClipRect(
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  heightFactor: t, // drives the actual height
+                  child: IgnorePointer(
+                    ignoring: t < 0.01,
+                    child: child,
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+
+    return _RightEdgeDismissible(
+      dismissibleKey: ValueKey('cat_${widget.category}'),
+      enabled: widget.canDismiss,
+      confirmDelete: widget.confirmDelete,
+      onDismissed: widget.onDeleted,
+      buildSecondaryBackground: () => Container(
+        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        alignment: Alignment.centerRight,
+        decoration: BoxDecoration(
+          color: Colors.redAccent.withValues(alpha: .18),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.redAccent.withValues(alpha: .4)),
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            Text('Delete', style: TextStyle(color: Colors.redAccent)),
+            SizedBox(width: 8),
+            Icon(Icons.delete_forever, color: Colors.redAccent),
+          ],
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          header,
+          body, // always present; height animates between 0↔1
+          if (widget.category == 'Uncategorized') const SizedBox(height: 2),
+        ],
+      ),
+    );
+  }
+}
+
+// ===================== XP Debugger Bottom Sheet (compact) =====================
+
+class _CategoryXpDebugSheet extends StatelessWidget {
+  const _CategoryXpDebugSheet();
+
+  static const coreCategories = [
+    'RAPPING',
+    'PRODUCTION',
+    'HEALTH',
+    'KNOWLEDGE',
+    'NETWORKING',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final provider = Provider.of<ObjectiveProvider>(context);
+    final missionProvider =
+        Provider.of<MissionProvider>(context, listen: false);
+
+    // Ensure base cats exist
+    for (final id in coreCategories) {
+      provider.ensureCategoryExists(id);
+    }
+
+    final categories = provider.categories;
+    final totalXp = provider.totalXp;
+    final totalLevel = provider.totalLevel;
+    final totalProgress = provider.totalLevelProgress;
+    final totalXpForNext = provider.totalXpForNextLevel;
+
+    // ~3/4 of the bottom half ≈ 0.375 of screen height
+    final sheetHeight = (media.size.height * 0.38).clamp(260.0, 480.0);
+
+    return SafeArea(
+      top: false,
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: Material(
+          color: Colors.transparent,
+          child: AnimatedPadding(
+            duration: const Duration(milliseconds: 150),
+            curve: Curves.easeOut,
+            padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+            child: Container(
+              height: sheetHeight,
+              decoration: BoxDecoration(
+                color: const Color(0xFF121826), // deep blue-black
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(16)),
+                border: Border.all(
+                    color: AppPalette.outline.withValues(alpha: .22)),
+                boxShadow: const [
+                  BoxShadow(
+                    blurRadius: 20,
+                    offset: Offset(0, -6),
+                    color: Color(0x66000000),
+                  ),
+                ],
+              ),
+              child: Column(
+                children: [
+                  const SizedBox(height: 8),
+                  // drag handle
+                  Container(
+                    width: 36,
+                    height: 3,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: .22),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  // header row (compact)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.science_outlined,
+                            color: Colors.white70, size: 18),
+                        const SizedBox(width: 6),
+                        const Expanded(
+                          child: Text(
+                            'XP Debugger',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                        TextButton.icon(
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.white70,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 6),
+                            textStyle: const TextStyle(fontSize: 12),
+                          ),
+                          onPressed: () => Navigator.of(context).maybePop(),
+                          icon: const Icon(Icons.close, size: 16),
+                          label: const Text('Close'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  // content (scrollable, compact)
+                  Expanded(
+                    child: ListView(
+                      physics: const BouncingScrollPhysics(),
+                      padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+                      children: [
+                        // Total card (compact)
+                        Card(
+                          color: Colors.blueGrey[900],
+                          margin: const EdgeInsets.only(bottom: 10),
+                          child: Padding(
+                            padding: const EdgeInsets.all(10),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  "🧠 Total Progress",
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Text("Total XP: $totalXp",
+                                    style: const TextStyle(
+                                        fontSize: 12, color: Colors.white70)),
+                                Text("Total Level: $totalLevel",
+                                    style: const TextStyle(
+                                        fontSize: 12, color: Colors.white70)),
+                                const SizedBox(height: 4),
+                                SizedBox(
+                                  height: 4,
+                                  child: LinearProgressIndicator(
+                                    value: totalProgress.clamp(0.0, 1.0),
+                                    backgroundColor: Colors.grey[700],
+                                    color: Colors.cyan,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  "$totalXp / $totalXpForNext XP for next level",
+                                  style: const TextStyle(
+                                      fontSize: 11, color: Colors.white70),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        // Category cards (compact)
+                        ...categories.values.map((cat) {
+                          const maxXp = 600000;
+                          final currentLevel =
+                              LevelUtils.getLevelFromXp(cat.xp, maxXp);
+                          final nextLevel =
+                              (currentLevel + 1).clamp(1, LevelUtils.maxLevel);
+                          final xpForCurrent =
+                              LevelUtils.getXpForLevel(currentLevel, maxXp);
+                          final xpForNext =
+                              LevelUtils.getXpForLevel(nextLevel, maxXp);
+                          final progress = ((cat.xp - xpForCurrent) /
+                                  (xpForNext - xpForCurrent))
+                              .clamp(0.0, 1.0);
+                          final prestige = cat.prestigeTitle;
+                          final colorHex = cat.prestigeColor;
+                          final color = _parseColor(colorHex);
+
+                          return Card(
+                            color: Colors.grey[850],
+                            margin: const EdgeInsets.symmetric(vertical: 6),
+                            child: Padding(
+                              padding: const EdgeInsets.all(10),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    "${cat.name} — Lv.$currentLevel ($prestige)",
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  SizedBox(
+                                    height: 4,
+                                    child: LinearProgressIndicator(
+                                      value: progress,
+                                      color: color ?? Colors.amber,
+                                      backgroundColor: Colors.grey[700],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    "${cat.xp} / $xpForNext XP",
+                                    style: const TextStyle(
+                                        fontSize: 11, color: Colors.white70),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        }),
+                        const SizedBox(height: 8),
+                        Center(
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.redAccent,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 8),
+                              textStyle: const TextStyle(fontSize: 12),
+                            ),
+                            onPressed: () {
+                              provider.resetEverything(
+                                  missionProvider: missionProvider);
+                            },
+                            child: const Text(
+                              "🧹 Full Reset (XP, Objectives, Stats, Milestones)",
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Color? _parseColor(String hex) {
+    try {
+      final hexCode = hex.replaceAll("#", "");
+      if (hexCode.length == 6) {
+        return Color(int.parse("FF$hexCode", radix: 16));
+      } else if (hexCode.length == 8) {
+        return Color(int.parse(hexCode, radix: 16));
+      }
+    } catch (_) {}
+    return null;
   }
 }

@@ -1,4 +1,3 @@
-// lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -14,29 +13,29 @@ import 'package:kontinuum/models/stat_history_entry.dart';
 import 'package:kontinuum/models/milestone.dart';
 import 'package:kontinuum/models/mission.dart';
 
-// Writing editor registry + blocks
+// writing editor...
 import 'package:kontinuum/ui/writing_editor/blocks/block_registry.dart';
 import 'package:kontinuum/ui/writing_editor/models/text_block.dart'
     show BlockType;
-
-// Entendre
 import 'package:kontinuum/ui/writing_editor/blocks/handlers/entendre_behavior.dart';
 import 'package:kontinuum/ui/writing_editor/blocks/handlers/entendre_handler.dart';
 import 'package:kontinuum/ui/writing_editor/blocks/editors/entendre_editor.dart';
-
-// Simile
 import 'package:kontinuum/ui/writing_editor/blocks/editors/simile_editor.dart';
 
-// 👇 Global watcher that shows level-up popups anywhere in the app
 import 'package:kontinuum/ui/widgets/level_up_watcher.dart';
+import 'package:kontinuum/data/hive_service.dart';
+
+// ✅ banking boxes
+import 'package:kontinuum/services/budget_boxes.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
   await Hive.initFlutter();
 
-  // Hive adapters
+  // ✅ Register your app's existing adapters first (if not already generated on access)
   Hive.registerAdapter(StatAdapter());
   Hive.registerAdapter(SkillAdapter());
   Hive.registerAdapter(CategoryAdapter());
@@ -47,27 +46,28 @@ Future<void> main() async {
   Hive.registerAdapter(MissionAdapter());
   Hive.registerAdapter(MissionRarityAdapter());
 
-  // Hive boxes
-  await Hive.openBox<Skill>('skillsBox');
-  await Hive.openBox<Stat>('statsBox');
-  await Hive.openBox<Category>('categoriesBox');
-  await Hive.openBox<Objective>('staticObjectivesBox');
-  await Hive.openBox('objectivesByDateBox');
-  await Hive.openBox<StatHistoryEntry>('statHistoryBox');
-  await Hive.openBox<Milestone>('milestoneBox');
-  await Hive.openBox<Mission>('activeMissionsBox');
+  // ✅ Open your existing boxes
+  await Hive.openBox<Skill>(HiveService.skillBoxName);
+  await Hive.openBox<Stat>(HiveService.statBoxName);
+  await Hive.openBox<Category>(HiveService.categoryBoxName);
+  await Hive.openBox<Objective>(HiveService.staticObjectivesBoxName);
+  await Hive.openBox<dynamic>(HiveService.objectivesByDateBoxName);
+  await Hive.openBox<StatHistoryEntry>(HiveService.statHistoryBoxName);
+  await Hive.openBox<Milestone>(HiveService.milestoneBoxName);
+  await Hive.openBox<Mission>(HiveService.activeMissionsBoxName);
+  await Hive.openBox<dynamic>(HiveService.missionMetaBoxName);
 
-  // Register writing blocks (render + behavior + editor UI)
-  final reg = BlockRegistry.instance;
-  reg
+  // ✅ Register adapters and open banking boxes (only once)
+  await BudgetBoxes.init();
+
+  // Writing-editor registry
+  final reg = BlockRegistry.instance
     ..registerHandler(EntendreHandler())
     ..registerBehavior(BlockType.entendre, EntendreBehavior())
     ..registerEditor(BlockType.entendre, EntendreEditor())
     ..registerEditor(BlockType.simile, SimileEditor());
-
   debugPrint('🧩 BlockRegistry wired: Entendre + Simile');
 
-  // Providers (create once here so we can wire them together)
   final objectiveProvider = ObjectiveProvider();
   final missionProvider = MissionProvider()
     ..attachObjectiveProvider(objectiveProvider);
@@ -77,14 +77,10 @@ Future<void> main() async {
     MultiProvider(
       providers: [
         ChangeNotifierProvider<ObjectiveProvider>.value(
-          value: objectiveProvider,
-        ),
+            value: objectiveProvider),
         ChangeNotifierProvider<MissionProvider>.value(value: missionProvider),
       ],
-      // ⬇️ Mount a single LevelUpWatcher globally so popups fire on every screen
-      child: const LevelUpWatcher(
-        child: KontinuumApp(), // Your app builds the MaterialApp inside
-      ),
+      child: const LevelUpWatcher(child: KontinuumApp()),
     ),
   );
 }

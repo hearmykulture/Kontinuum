@@ -1,3 +1,4 @@
+// lib/ui/screens/missions/mission_bank_screen.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -165,13 +166,19 @@ class _AllMissionsTab extends StatelessWidget {
     );
   }
 
-  Color _rarityColor(MissionRarity r) => switch (r) {
-    MissionRarity.common => Colors.grey,
-    MissionRarity.rare => Colors.cyanAccent,
-    MissionRarity.legendary => Colors.deepPurpleAccent,
-  };
+  static Color _rarityColor(MissionRarity r) {
+    switch (r) {
+      case MissionRarity.common:
+        return Colors.grey;
+      case MissionRarity.rare:
+        return Colors.cyanAccent;
+      case MissionRarity.legendary:
+        return Colors.deepPurpleAccent;
+    }
+  }
 
-  Widget _chip(String label, {required Color border, required Color text}) {
+  static Widget _chip(String label,
+      {required Color border, required Color text}) {
     Color alpha(Color c, double o) => c.withAlpha((o * 255).round());
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -219,11 +226,7 @@ class _CompletedMissionsTab extends StatelessWidget {
           const Divider(height: 1, color: Colors.white10),
       itemBuilder: (_, i) {
         final m = completed[i];
-        final color = switch (m.rarity) {
-          MissionRarity.common => Colors.grey,
-          MissionRarity.rare => Colors.cyanAccent,
-          MissionRarity.legendary => Colors.deepPurpleAccent,
-        };
+        final color = _rarityColor(m.rarity);
 
         return ListTile(
           contentPadding: const EdgeInsets.symmetric(horizontal: 8),
@@ -278,7 +281,19 @@ class _CompletedMissionsTab extends StatelessWidget {
     );
   }
 
-  Widget _chip(String label, {required Color border, required Color text}) {
+  static Color _rarityColor(MissionRarity r) {
+    switch (r) {
+      case MissionRarity.common:
+        return Colors.grey;
+      case MissionRarity.rare:
+        return Colors.cyanAccent;
+      case MissionRarity.legendary:
+        return Colors.deepPurpleAccent;
+    }
+  }
+
+  static Widget _chip(String label,
+      {required Color border, required Color text}) {
     Color alpha(Color c, double o) => c.withAlpha((o * 255).round());
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -351,9 +366,8 @@ class _NewMissionDialogState extends State<_NewMissionDialog> {
     final statMetas = StatRepository.getAll().where(_validMeta).toList()
       ..sort((a, b) => a.display.toString().compareTo(b.display.toString()));
 
-    final previewId = (_idCtrl.text.isEmpty
-        ? _toIdSlug(_titleCtrl.text)
-        : _idCtrl.text);
+    final previewId =
+        (_idCtrl.text.isEmpty ? _toIdSlug(_titleCtrl.text) : _idCtrl.text);
 
     return AlertDialog(
       backgroundColor: const Color(0xFF1B1B23),
@@ -410,8 +424,7 @@ class _NewMissionDialogState extends State<_NewMissionDialog> {
               style: const TextStyle(color: Colors.white),
               items: categories
                   .map(
-                    (c) => DropdownMenuItem(value: c.id, child: Text(c.name)),
-                  )
+                      (c) => DropdownMenuItem(value: c.id, child: Text(c.name)))
                   .toList(),
               onChanged: (v) => setState(() => _categoryId = v),
               decoration: const InputDecoration(
@@ -466,9 +479,8 @@ class _NewMissionDialogState extends State<_NewMissionDialog> {
                   .map(
                     (r) => DropdownMenuItem(
                       value: r,
-                      child: Text(
-                        r.name[0].toUpperCase() + r.name.substring(1),
-                      ),
+                      child:
+                          Text(r.name[0].toUpperCase() + r.name.substring(1)),
                     ),
                   )
                   .toList(),
@@ -536,9 +548,8 @@ class _NewMissionDialogState extends State<_NewMissionDialog> {
             final mission = Mission(
               id: id,
               title: title,
-              description: _descCtrl.text.trim().isEmpty
-                  ? null
-                  : _descCtrl.text.trim(),
+              description:
+                  _descCtrl.text.trim().isEmpty ? null : _descCtrl.text.trim(),
               categoryIds: [_categoryId!],
               statIds: [_statId!],
               xpReward: xp,

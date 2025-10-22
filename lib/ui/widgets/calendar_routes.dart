@@ -14,10 +14,8 @@ Future<T?> showHeroBottomSheet<T>({
 }
 
 class _HeroSheetRoute<T> extends PageRoute<T> {
-  _HeroSheetRoute({
-    required this.builder,
-    bool barrierDismissible = true,
-  }) : _barrierDismissible = barrierDismissible;
+  _HeroSheetRoute({required this.builder, bool barrierDismissible = true})
+    : _barrierDismissible = barrierDismissible;
 
   final WidgetBuilder builder;
   final bool _barrierDismissible;
@@ -63,10 +61,7 @@ class _HeroSheetRoute<T> extends PageRoute<T> {
             begin: const Offset(0, 1),
             end: Offset.zero,
           ).animate(curved),
-          child: FadeTransition(
-            opacity: curved,
-            child: builder(context),
-          ),
+          child: FadeTransition(opacity: curved, child: builder(context)),
         ),
       ),
     );

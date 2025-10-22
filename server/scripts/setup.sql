@@ -1,0 +1,2 @@
+-- Optional seed/role grants for Docker Compose usage.
+-- Leave empty or add SQL statements as needed.

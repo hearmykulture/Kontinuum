@@ -1,5 +1,4 @@
 // lib/ui/widgets/mission_detail_hero_popup.dart
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -30,46 +29,65 @@ class MissionDetailHeroPopup extends StatelessWidget {
         ? Colors.greenAccent.withOpacity(0.75)
         : Colors.deepPurpleAccent.withOpacity(0.5);
 
-    return Material(
-      color: Colors.transparent,
-      child: Stack(
-        children: [
-          // backdrop
-          GestureDetector(
-            onTap: () {
-              onClose?.call();
-              Navigator.of(context).pop();
-            },
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+    return RepaintBoundary(
+      child: Material(
+        color: Colors.transparent,
+        child: Stack(
+          children: [
+            // backdrop (cheaper than full-screen BackdropFilter)
+            GestureDetector(
+              onTap: () {
+                onClose?.call();
+                Navigator.of(context).pop();
+              },
               child: Container(
                 width: double.infinity,
                 height: double.infinity,
-                color: Colors.black.withOpacity(0.4),
+                color: Colors.black.withOpacity(0.55),
               ),
             ),
-          ),
-          // sheet
-          Center(
-            child: Hero(
-              tag: mission.id,
-              child: Material(
-                color: Colors.transparent,
-                borderRadius: BorderRadius.circular(20),
-                clipBehavior: Clip.antiAlias,
-                child: Container(
-                  constraints: const BoxConstraints(
-                    maxWidth: 340,
-                    minHeight: 150,
-                    maxHeight: 600,
+
+            // sheet
+            Center(
+              child: Hero(
+                tag: mission.id,
+                // tiny, cheap in-flight widget to avoid flying full content
+                flightShuttleBuilder: (ctx, anim, dir, fromCtx, toCtx) =>
+                    AnimatedBuilder(
+                  animation: anim,
+                  builder: (_, __) => Opacity(
+                    opacity: Curves.easeOut.transform(anim.value),
+                    child: Container(
+                      width: 120,
+                      height: 70,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF161925),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: _rarityColor(mission).withOpacity(0.5),
+                          width: 1.2,
+                        ),
+                      ),
+                    ),
                   ),
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF161925).withOpacity(0.95),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: borderColor, width: 1.7), // ✅
-                  ),
-                  child: IntrinsicHeight(
+                ),
+                child: Material(
+                  color: Colors.transparent,
+                  borderRadius: BorderRadius.circular(20),
+                  clipBehavior: Clip.antiAlias,
+                  child: Container(
+                    constraints: const BoxConstraints(
+                      maxWidth: 340,
+                      minHeight: 150,
+                      maxHeight: 600,
+                    ),
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF161925).withOpacity(0.95),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: borderColor, width: 1.7), // ✅
+                    ),
+                    // ⬇️ No IntrinsicHeight; let the scroll view size naturally
                     child: SingleChildScrollView(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -127,15 +145,12 @@ class MissionDetailHeroPopup extends StatelessWidget {
                             runSpacing: 4,
                             children: [
                               ...mission.categoryIds.map((id) {
-                                final cat = objectiveProvider.getCategoryById(
-                                  id,
-                                );
-                                final level = LevelUtils.getCategoryLevelFromXp(
-                                  cat.xp,
-                                );
-                                final prestige = LevelUtils.getPrestigeTitle(
-                                  level,
-                                );
+                                final cat =
+                                    objectiveProvider.getCategoryById(id);
+                                final level =
+                                    LevelUtils.getCategoryLevelFromXp(cat.xp);
+                                final prestige =
+                                    LevelUtils.getPrestigeTitle(level);
                                 return Container(
                                   padding: const EdgeInsets.symmetric(
                                     horizontal: 8,
@@ -238,7 +253,7 @@ class MissionDetailHeroPopup extends StatelessWidget {
                                               mission.categoryIds.isNotEmpty;
                                           final String label = hasCat
                                               ? mission.categoryIds.first
-                                                    .toUpperCase()
+                                                  .toUpperCase()
                                               : "Total";
                                           final Color color = hasCat
                                               ? _categoryColor(
@@ -306,8 +321,8 @@ class MissionDetailHeroPopup extends StatelessWidget {
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

@@ -1,0 +1,72 @@
+{
+  "name": "kontinuum-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "description": "",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node -r dotenv/config dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepare": "prisma generate",
+
+    "prisma:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "prisma:studio": "prisma studio",
+
+    "reset:item": "tsx scripts/reset-item.ts",
+
+    "plaid:new": "node -e \"(async()=>{const user=process.env.USER_ID||'demo'; const inst=process.env.INST_ID||'ins_109508'; const name=process.env.INST_NAME||'First Platypus Bank'; const r=await fetch('http://localhost:4001/plaid/sandbox/create-item',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId:user,institutionId:inst,institutionName:name})}); console.log(await r.text());})().catch(e=>{console.error(e);process.exit(1);});\"",
+
+    "plaid:subscribe": "node -e \"(async()=>{const id=process.env.ITEM_ID||process.argv[2];if(!id){console.error('ITEM_ID required');process.exit(1);} const r=await fetch('http://localhost:4001/plaid/subscribe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({itemId:id})}); console.log(await r.text());})().catch(e=>{console.error(e);process.exit(1);});\"",
+    "plaid:sync": "node -e \"(async()=>{const id=process.env.ITEM_ID||process.argv[2];if(!id){console.error('ITEM_ID required');process.exit(1);} const r=await fetch('http://localhost:4001/plaid/sync',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({itemId:id})}); console.log(await r.text());})().catch(e=>{console.error(e);process.exit(1);});\"",
+    "plaid:refresh": "node -e \"(async()=>{const id=process.env.ITEM_ID||process.argv[2];if(!id){console.error('ITEM_ID required');process.exit(1);} const r=await fetch('http://localhost:4001/plaid/transactions/refresh',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({itemId:id})}); console.log(await r.text());})().catch(e=>{console.error(e);process.exit(1);});\"",
+
+    "plaid:webhook:default": "node -e \"(async()=>{const id=process.env.ITEM_ID||process.argv[2];if(!id){console.error('ITEM_ID required');process.exit(1);} const body={itemId:id,webhookType:'TRANSACTIONS',webhookCode:'DEFAULT_UPDATE'}; const r=await fetch('http://localhost:4001/plaid/sandbox/fire-webhook',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}); console.log(await r.text());})().catch(e=>{console.error(e);process.exit(1);});\"",
+    "plaid:webhook:sync": "node -e \"(async()=>{const id=process.env.ITEM_ID||process.argv[2];if(!id){console.error('ITEM_ID required');process.exit(1);} const body={itemId:id,webhookType:'TRANSACTIONS',webhookCode:'SYNC_UPDATES_AVAILABLE'}; const r=await fetch('http://localhost:4001/plaid/sandbox/fire-webhook',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}); console.log(await r.text());})().catch(e=>{console.error(e);process.exit(1);});\"",
+    "plaid:webhook:historical": "node -e \"(async()=>{const id=process.env.ITEM_ID||process.argv[2];if(!id){console.error('ITEM_ID required');process.exit(1);} const body={itemId:id,webhookType:'TRANSACTIONS',webhookCode:'HISTORICAL_UPDATE'}; const r=await fetch('http://localhost:4001/plaid/sandbox/fire-webhook',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}); console.log(await r.text());})().catch(e=>{console.error(e);process.exit(1);});\"",
+    "plaid:webhook:removed": "node -e \"(async()=>{const id=process.env.ITEM_ID||process.argv[2];if(!id){console.error('ITEM_ID required');process.exit(1);} const body={itemId:id,webhookType:'TRANSACTIONS',webhookCode:'TRANSACTIONS_REMOVED'}; const r=await fetch('http://localhost:4001/plaid/sandbox/fire-webhook',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}); console.log(await r.text());})().catch(e=>{console.error(e);process.exit(1);});\"",
+    "plaid:fire": "node -e \"(async()=>{const id=process.env.ITEM_ID||process.argv[2];const type=process.env.WT||process.argv[3]||'TRANSACTIONS';const code=process.env.WC||process.argv[4]||'DEFAULT_UPDATE';if(!id){console.error('ITEM_ID required');process.exit(1);} const r=await fetch('http://localhost:4001/plaid/sandbox/fire-webhook',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({itemId:id,webhookType:type,webhookCode:code})}); console.log(await r.text());})().catch(e=>{console.error(e);process.exit(1);});\"",
+
+    "plaid:cursor:reset": "node -e \"import('./dist/db/prisma.js').then(async ({prisma})=>{const id=process.env.ITEM_ID||process.argv[2];if(!id){console.error('ITEM_ID required');process.exit(1);} await prisma.bankItem.update({where:{id},data:{cursor:null}}); console.log('cursor reset:',id); process.exit(0);});\"",
+
+    "plaid:remove:fake": "node -e \"import('./dist/db/prisma.js').then(async ({prisma})=>{const itemId=process.env.ITEM_ID||process.argv[2];if(!itemId){console.error('ITEM_ID required');process.exit(1);} const bi=await prisma.bankItem.findUnique({ where:{ id:itemId } }); const tx=await prisma.bankTransaction.findMany({ where:{ account:{ itemId }, removed:false }, select:{ id:true }, take:5 }); const payload={webhook_type:'TRANSACTIONS', webhook_code:'TRANSACTIONS_REMOVED', item_id: bi.plaidItemId, removed_transactions: tx.map(t=>t.id)}; const r=await fetch('http://localhost:4001/plaid/webhook',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)}); console.log('webhook', r.status); console.log(payload); process.exit(0);});\"",
+    "plaid:removed:count": "node -e \"import('./dist/db/prisma.js').then(async ({prisma})=>{const itemId=process.env.ITEM_ID||process.argv[2];const n=await prisma.bankTransaction.count({where:{account:{itemId},removed:true}}); console.log({item:itemId,removedCount:n}); process.exit(0);});\"",
+
+
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.17.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "morgan": "^1.10.1",
+    "pino": "^9.3.2",
+    "plaid": "^25.0.0",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^4.17.23",
+    "@types/morgan": "^1.9.10",
+    "@types/node": "^20.19.23",
+    "pino-pretty": "^11.2.2",
+    "prisma": "^6.17.1",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=18.17"
+  }
+}
