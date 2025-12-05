@@ -75,7 +75,7 @@ class AddItemFab extends StatelessWidget {
 
   // ————— Root "Create" menu —————
   void _showAddMenu(BuildContext context) {
-    _showCardDialog(
+    _showCardDialog<void>(
       context,
       // ↓ remove unwanted top padding from SafeArea
       child: SafeArea(
@@ -124,11 +124,11 @@ class AddItemFab extends StatelessWidget {
   }
 
   void _showNewCategoryCard(BuildContext context) {
-    _showCardDialog(context, child: const _NewCategoryCard());
+    _showCardDialog<void>(context, child: const _NewCategoryCard());
   }
 
   void _showNewObjectiveCard(BuildContext context) {
-    _showCardDialog(context, child: const _NewObjectiveCard());
+    _showCardDialog<void>(context, child: const _NewObjectiveCard());
   }
 }
 
@@ -410,12 +410,10 @@ class _NewObjectiveCardState extends State<_NewObjectiveCard> {
         return 'Tally / counter';
       case ObjectiveType.stopwatch:
         return 'Stopwatch / duration';
-      case ObjectiveType.writingPrompt:
-        return 'Writing prompt';
-      case ObjectiveType.reflective:
-        return 'Reflective';
       case ObjectiveType.subtask:
         return 'Subtask';
+      case ObjectiveType.abstinence:
+        return 'Abstinence';
     }
   }
 
@@ -669,13 +667,15 @@ class _NewObjectiveCardState extends State<_NewObjectiveCard> {
                           icon: const Icon(Icons.add),
                           label: const Text('Create new'),
                           onPressed: () async {
+                            final provider = context.read<ObjectiveProvider>();
                             final created = await showDialog<_NewStatResult>(
                               context: context,
                               builder: (_) => const NewStatDialog(),
                             );
+                            if (!mounted) return;
                             if (created != null) {
                               // Register the counter entry so it can accrue; metadata lives in repository/seeders.
-                              context.read<ObjectiveProvider>().registerStat(
+                              provider.registerStat(
                                 Stat(
                                   id: created.id,
                                   label: created.name,

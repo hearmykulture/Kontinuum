@@ -391,7 +391,7 @@ packages:
     source: hosted
     version: "1.0.0"
   flutter_keyboard_visibility_platform_interface:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: flutter_keyboard_visibility_platform_interface
       sha256: e43a89845873f7be10cb3884345ceb9aebf00a659f479d1c8f4293fcb37022a4
@@ -862,7 +862,7 @@ packages:
     source: hosted
     version: "1.5.0"
   quill_native_bridge:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: quill_native_bridge
       sha256: "76a16512e398e84216f3f659f7cb18a89ec1e141ea908e954652b4ce6cf15b18"
@@ -894,7 +894,7 @@ packages:
     source: hosted
     version: "0.0.1"
   quill_native_bridge_platform_interface:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: quill_native_bridge_platform_interface
       sha256: "8264a2bdb8a294c31377a27b46c0f8717fa9f968cf113f7dc52d332ed9c84526"

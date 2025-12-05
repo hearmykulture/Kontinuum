@@ -18,7 +18,7 @@ class ProjectProvider extends ChangeNotifier {
   Project createProject({String? name, bool silent = false}) {
     final id = AppClock.now().microsecondsSinceEpoch.toString();
     final count = _projects.length + 1;
-    final trimmed = name ?? '').trim();
+    final trimmed = (name ?? '').trim();
     final project =
         Project(id: id, name: trimmed.isEmpty ? 'Project $count' : trimmed);
 

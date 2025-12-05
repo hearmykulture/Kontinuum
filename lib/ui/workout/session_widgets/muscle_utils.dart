@@ -107,14 +107,14 @@ void accumulateBodyPartLoad(
   for (final muscle in exercise.primaryMuscles) {
     final axis = (canonicalBodyPart(muscle) ?? formatTitleCase(muscle)).trim();
     if (axis.isEmpty) continue;
-    totals[axis] = totals[axis] ?? 0.0) + primaryWeight;
+    totals[axis] = (totals[axis] ?? 0.0) + primaryWeight;
     tracked = true;
   }
 
   for (final muscle in exercise.secondaryMuscles) {
     final axis = (canonicalBodyPart(muscle) ?? formatTitleCase(muscle)).trim();
     if (axis.isEmpty) continue;
-    totals[axis] = totals[axis] ?? 0.0) + secondaryWeight;
+    totals[axis] = (totals[axis] ?? 0.0) + secondaryWeight;
     tracked = true;
   }
 
@@ -122,7 +122,7 @@ void accumulateBodyPartLoad(
     for (final muscle in exercise.muscles) {
       final axis = (canonicalBodyPart(muscle) ?? formatTitleCase(muscle)).trim();
       if (axis.isEmpty) continue;
-      totals[axis] = totals[axis] ?? 0.0) + fallbackWeight;
+      totals[axis] = (totals[axis] ?? 0.0) + fallbackWeight;
     }
   }
 }

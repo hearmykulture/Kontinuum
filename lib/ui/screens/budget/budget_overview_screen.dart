@@ -545,7 +545,7 @@ class _BudgetOverviewScreenState extends State<BudgetOverviewScreen>
     final media = MediaQuery.of(context);
     final topInset = media.size.height * _topInsetFraction;
     final showChart = _ctrl.monthlyAmount != null;
-    final pillH = _pillSize?.height ?? 44.0);
+    final pillH = _pillSize?.height ?? 44.0;
 
     final areaHeight = showChart ? _ringSize : (pillH + _pillInitialTop);
     final pillTop = showChart ? (_ringSize - pillH) / 2 : _pillInitialTop;

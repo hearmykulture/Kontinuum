@@ -190,7 +190,7 @@ class ProgressiveOverloadEngine {
       if (lastLoad == null || lastLoad <= 0) {
         // Bodyweight path:
         // - bump reps target by +1 or +2 until a cap, then suggest loading
-        final int newRepsTarget = targetReps ?? actualReps ?? 0) + 1;
+        final int newRepsTarget = (targetReps ?? actualReps ?? 0) + 1;
         return PoPreview(
           nextLoadKg: null,
           nextRepsTarget: newRepsTarget,

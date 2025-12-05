@@ -814,7 +814,7 @@ class _EmptyWorkoutSessionScreenState extends State<EmptyWorkoutSessionScreen>
     final double reservedBottom =
         actionButtonSize + actionRowBottomSpacing + 10;
 
-    final int targetSets = widget.targetSets ?? 3).clamp(1, 999);
+    final int targetSets = (widget.targetSets ?? 3).clamp(1, 999);
     final int targetReps = widget.targetReps ?? 8;
     final double targetLoadLb = widget.targetLoadLb ?? 125;
     final int? targetWorkSeconds = widget.targetWorkSeconds;

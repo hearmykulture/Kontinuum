@@ -24,7 +24,7 @@ class OpenFoodFactsService {
     if (res.statusCode != 200) return [];
 
     final data = jsonDecode(res.body) as Map<String, dynamic>;
-    final products = data['products'] as List? ?? [])
+    final products = (data['products'] as List? ?? [])
         .map((p) => OffProduct.fromJson(p as Map<String, dynamic>))
         .where((p) => p.name.isNotEmpty)
         .toList();

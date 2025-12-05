@@ -127,7 +127,7 @@ class LevelUtils {
   static int getStatCap(double skillWeight, double statWeight) {
     if (!skillWeight.isFinite || !statWeight.isFinite) return 0;
     if (skillWeight <= 0 || statWeight <= 0) return 0;
-    return categoryMaxXp * skillWeight * statWeight.round();
+    return (categoryMaxXp * skillWeight * statWeight).round();
   }
 
   // === DYNAMIC LEVELING (for Skill/Stat) ===

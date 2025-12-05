@@ -9,17 +9,7 @@ import 'package:kontinuum/services/workout_stat_engine.dart';
 
 import 'workout_editor_constants.dart';
 import 'workout_overview_screen.dart';
-
-class SessionScreenArgs {
-  /// When null, the overview screen will fall back to the active draft.
-  final String? workoutId;
-  final String? attachToRoutineId;
-
-  const SessionScreenArgs({
-    this.workoutId,
-    this.attachToRoutineId,
-  });
-}
+import 'session_screen_args.dart';
 
 class SessionScreen extends StatelessWidget {
   const SessionScreen({super.key, this.args});

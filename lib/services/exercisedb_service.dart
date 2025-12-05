@@ -177,7 +177,7 @@ class ExerciseDbService {
       // v1 API uses "exerciseId"
       final String idRaw =
           (map['exerciseId'] ?? map['id'] ?? '').toString().trim();
-      final String nameRaw = map['name'] ?? '').toString().trim();
+      final String nameRaw = (map['name'] ?? '').toString().trim();
 
       if (idRaw.isEmpty && nameRaw.isEmpty) continue;
 
@@ -212,7 +212,7 @@ class ExerciseDbService {
         if (map['equipment'] != null) map['equipment'].toString(),
       ].map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
 
-      final String? mediaUrl = map['gifUrl'] ?? map['mediaUrl'])?.toString();
+      final String? mediaUrl = (map['gifUrl'] ?? map['mediaUrl'])?.toString();
 
       final existing = box.get(exerciseId);
 

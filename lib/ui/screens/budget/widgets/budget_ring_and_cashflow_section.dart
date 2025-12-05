@@ -9,16 +9,35 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 import 'package:kontinuum/providers/budget_provider.dart';
 import 'package:kontinuum/services/bank_link_service.dart';
-import 'package:kontinuum/models/budget_transaction.dart';
 import 'package:kontinuum/services/budget_boxes.dart';
+import 'package:kontinuum/models/budget_transaction.dart';
 import 'package:kontinuum/ui/screens/budget/models/budget_models.dart';
-import 'package:kontinuum/ui/screens/budget/utils/recurring_schedule.dart';
+import 'package:kontinuum/ui/screens/budget/utils/recurring_schedule.dart'
+    show
+        RecurringInstance,
+        buildUpcomingInstancesForSpan,
+        windowForBudgetTimeSpan;
 import 'package:kontinuum/ui/screens/budget/widgets/budget_ring_chart.dart';
 
 import '../budget_screen_theme.dart';
 import 'package:kontinuum/core/time/app_clock.dart';
 import 'package:kontinuum/ui/screens/budget/create_transaction_screen.dart';
 import 'package:kontinuum/ui/screens/budget/theme/budget_theme.dart';
+
+/* ───────────────────────── Budget Time Span ───────────────────────── */
+
+String labelForBudgetTimeSpan(BudgetTimeSpan span) {
+  switch (span) {
+    case BudgetTimeSpan.weekly:
+      return 'Weekly';
+    case BudgetTimeSpan.monthly:
+      return 'Monthly';
+    case BudgetTimeSpan.yearly:
+      return 'Yearly';
+    case BudgetTimeSpan.custom:
+      return 'Custom';
+  }
+}
 
 /* ───────────────────────── Helpers ───────────────────────── */
 
@@ -27,13 +46,13 @@ import 'package:kontinuum/ui/screens/budget/theme/budget_theme.dart';
 int normalizedMonthlyCents(RecurringExpense r) {
   switch (r.cadence) {
     case Recurrence.weekly:
-      final countPerWeek =
-          r.weeklyWeekdays.isNotEmpty ? r.weeklyWeekdays.length : 1;
-      return r.amountCents * countPerWeek * 52 / 12.round();
+      // Assume 1 weekly occurrence per week if not specified
+      final countPerWeek = 1;
+      return ((r.amountCents * countPerWeek * 52) / 12).round();
     case Recurrence.monthly:
       return r.amountCents;
     case Recurrence.yearly:
-      return r.amountCents / 12.round();
+      return (r.amountCents / 12).round();
   }
 }
 
@@ -174,7 +193,7 @@ class _BudgetRingSectionState extends State<BudgetRingSection> {
       if (cat == null) {
         uncategorizedCents += monthlyRecCents;
       } else {
-        categoryTotals[cat.name] = categoryTotals[cat.name] ?? 0) + monthlyRecCents;
+        categoryTotals[cat.name] = (categoryTotals[cat.name] ?? 0) + monthlyRecCents;
       }
     }
 
@@ -186,7 +205,7 @@ class _BudgetRingSectionState extends State<BudgetRingSection> {
 
     // Only add categories with spend > 0 to avoid degenerate slices.
     for (final cat in budget.categories) {
-      final cents = categoryTotals[cat.name] ?? 0);
+      final cents = categoryTotals[cat.name] ?? 0;
       if (cents > 0) {
         values.add(cents.toDouble());
         colors.add(cat.color);
@@ -1207,20 +1226,20 @@ class _CashFlowSectionState extends State<_CashFlowSection> {
     final today = DateTime(now.year, now.month, now.day);
     switch (range) {
       case _CashFlowRange.day:
-        return today, today;
+        return (today, today);
       case _CashFlowRange.week:
         final from = today.subtract(const Duration(days: 6));
-        return from, today;
+        return (from, today);
       case _CashFlowRange.month:
         final from = DateTime(today.year, today.month, 1);
-        return from, today;
+        return (from, today);
       case _CashFlowRange.year:
         final from = today.subtract(const Duration(days: 365));
-        return from, today;
+        return (from, today);
       case _CashFlowRange.custom:
         final from = _customFrom ?? DateTime(today.year, today.month, 1);
         final to = _customTo ?? today;
-        return from, to;
+        return (from, to);
     }
   }
 
@@ -2063,17 +2082,17 @@ class _CategoriesSectionState extends State<_CategoriesSection> {
     switch (range) {
       case _CategoryRange.automatic:
         final from = DateTime(today.year, today.month, 1);
-        return from, today;
+        return (from, today);
       case _CategoryRange.week:
         final from = today.subtract(const Duration(days: 6));
-        return from, today;
+        return (from, today);
       case _CategoryRange.year:
         final from = today.subtract(const Duration(days: 365));
-        return from, today;
+        return (from, today);
       case _CategoryRange.custom:
         final from = _customFrom ?? DateTime(today.year, today.month, 1);
         final to = _customTo ?? today;
-        return from, to;
+        return (from, to);
     }
   }
 
@@ -2192,7 +2211,7 @@ class _CategoriesSectionState extends State<_CategoriesSection> {
       final cat = rec.category;
       if (cat == null) continue;
       final cents = normalizedMonthlyCents(rec);
-      map[cat.name] = map[cat.name] ?? 0) + cents;
+      map[cat.name] = (map[cat.name] ?? 0) + cents;
     }
     return map;
   }
@@ -2678,7 +2697,7 @@ List<BankTransaction> _manualTransactionsForRange({
     if (day.isBefore(dateStart) || day.isAfter(dateEnd)) continue;
 
     if (accountFilter != null && accountFilter.isNotEmpty) {
-      final type = txn.accountType ?? 'manual').toLowerCase();
+      final type = (txn.accountType ?? 'manual').toLowerCase();
       if (type != accountFilter) continue;
     }
 
@@ -2689,7 +2708,7 @@ List<BankTransaction> _manualTransactionsForRange({
     }
 
     if (categoryFilter != null && categoryFilter.isNotEmpty) {
-      final txnCat = txn.category ?? '').toLowerCase();
+      final txnCat = (txn.category ?? '').toLowerCase();
       if (txnCat != categoryFilter) continue;
     }
 
@@ -2724,7 +2743,7 @@ BankTransaction _manualToBankTransaction(BudgetTransaction txn) {
           ? txn.memo!
           : (txn.accountName ?? 'Manual transaction'));
 
-  return (
+  return BankTransaction(
     id: txn.id,
     accountId: txn.accountId,
     accountName: txn.accountName,
@@ -2756,20 +2775,18 @@ CashFlowSummary? _summaryWithManual(
     return base;
   }
   if (base == null) {
-    return (
+    return CashFlowSummary(
+      totalIncome: delta.inflow,
+      totalExpense: delta.outflow,
       from: from,
       to: to,
-      inflow: delta.inflow,
-      outflow: delta.outflow,
-      net: delta.net,
     );
   }
-  return (
+  return CashFlowSummary(
+    totalIncome: base.inflow + delta.inflow,
+    totalExpense: base.outflow + delta.outflow,
     from: base.from ?? from,
     to: base.to ?? to,
-    inflow: base.inflow + delta.inflow,
-    outflow: base.outflow + delta.outflow,
-    net: base.net + delta.net,
   );
 }
 
@@ -2779,7 +2796,7 @@ CashFlowSummary? _summaryWithManual(
   double outflow = 0;
   for (final t in manual) {
     final amt = t.amount.abs();
-    final flow = t.flow ?? (t.isExpense ? 'expense' : 'income')).toLowerCase();
+    final flow = (t.flow ?? (t.isExpense ? 'expense' : 'income')).toLowerCase();
     if (flow == 'income') {
       inflow += amt;
     } else if (flow == 'expense') {
@@ -2788,7 +2805,11 @@ CashFlowSummary? _summaryWithManual(
       outflow += amt;
     }
   }
-  return inflow: inflow, outflow: outflow, net: inflow - outflow;
+  return (
+    inflow: inflow,
+    outflow: outflow,
+    net: inflow - outflow,
+  );
 }
 
 class _MiniCategoryRing extends StatelessWidget {

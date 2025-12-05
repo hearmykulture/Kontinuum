@@ -51,6 +51,8 @@ class BudgetCategory {
 
 enum Recurrence { weekly, monthly, yearly }
 
+enum BudgetTimeSpan { weekly, monthly, yearly, custom }
+
 class RecurringExpense {
   RecurringExpense({
     required this.name,
@@ -59,6 +61,10 @@ class RecurringExpense {
     required this.icon,
     required this.color,
     this.category,
+    this.weeklyWeekdays = const {},
+    this.monthlyDay = 1,
+    this.yearlyMonth = 1,
+    this.yearlyDay = 1,
   });
 
   final String name;
@@ -67,6 +73,10 @@ class RecurringExpense {
   final IconData icon;
   final Color color;
   final BudgetCategory? category;
+  final Set<int> weeklyWeekdays; // Weekday numbers (1-7)
+  final int monthlyDay; // Day of month (1-31)
+  final int yearlyMonth; // Month (1-12)
+  final int yearlyDay; // Day of month (1-31)
 
   RecurringExpense copyWith({
     String? name,
@@ -75,6 +85,10 @@ class RecurringExpense {
     IconData? icon,
     Color? color,
     BudgetCategory? category,
+    Set<int>? weeklyWeekdays,
+    int? monthlyDay,
+    int? yearlyMonth,
+    int? yearlyDay,
   }) {
     return RecurringExpense(
       name: name ?? this.name,
@@ -83,6 +97,10 @@ class RecurringExpense {
       icon: icon ?? this.icon,
       color: color ?? this.color,
       category: category ?? this.category,
+      weeklyWeekdays: weeklyWeekdays ?? this.weeklyWeekdays,
+      monthlyDay: monthlyDay ?? this.monthlyDay,
+      yearlyMonth: yearlyMonth ?? this.yearlyMonth,
+      yearlyDay: yearlyDay ?? this.yearlyDay,
     );
   }
 }
@@ -114,4 +132,84 @@ class AllocationItem {
   final String name;
   final Color color;
   final int cents;
+}
+
+/// ===== Bank/CashFlow models (stubs) =====
+
+/// Represents a bank transaction (stub implementation)
+class BankTransaction {
+  BankTransaction({
+    required this.id,
+    required this.accountId,
+    this.merchant,
+    this.name,
+    this.category,
+    this.categoryPath = const [],
+    required this.isExpense,
+    required this.amount,
+    this.flow,
+    required this.status,
+    this.date,
+    this.amountCents = 0,
+    this.pendingTransactionId,
+    this.currency,
+    this.accountType,
+    this.accountName,
+  });
+
+  final String id;
+  final String accountId;
+  final String? merchant;
+  final String? name;
+  final String? category;
+  final List<String> categoryPath;
+  final bool isExpense;
+  final double amount;
+  final String? flow;
+  final String status;
+  final DateTime? date;
+  final int amountCents;
+  final String? pendingTransactionId;
+  final String? currency;
+  final String? accountType;
+  final String? accountName;
+}
+
+/// Represents a snapshot of cash flow data (stub implementation)
+class CashFlowSnapshot {
+  CashFlowSnapshot({
+    this.transactions = const [],
+    this.summary,
+  });
+
+  final List<BankTransaction> transactions;
+  final CashFlowSummary? summary;
+}
+
+/// Summary of cash flow information (stub implementation)
+class CashFlowSummary {
+  CashFlowSummary({
+    this.totalIncome = 0,
+    this.totalExpense = 0,
+    this.from,
+    this.to,
+  });
+
+  final double totalIncome;
+  final double totalExpense;
+  final DateTime? from;
+  final DateTime? to;
+
+  double get net => totalIncome - totalExpense;
+  double get inflow => totalIncome;
+  double get outflow => totalExpense;
+}
+
+/// Exception thrown when bank API is offline
+class BankApiOfflineException implements Exception {
+  BankApiOfflineException(this.message);
+  final String message;
+
+  @override
+  String toString() => 'BankApiOfflineException: $message';
 }

@@ -41,7 +41,7 @@ class FdcSearchItem {
     final ln = j['labelNutrients'] as Map<String, dynamic>?;
     double? getLabelNutrient(String key) {
       final v = ln?[key];
-      if (v is Map && v['value'] is num) return v['value'] as num.toDouble();
+      if (v is Map && v['value'] is num) return (v['value'] as num).toDouble();
       return null;
     }
 
@@ -50,8 +50,8 @@ class FdcSearchItem {
       for (final fn in fns) {
         final nutrient = (fn as Map)['nutrient'] as Map?;
         // Some responses use flattened fields (name/unitName) directly on fn
-        final name = nutrient?['name'] ?? fn['nutrientName'])?.toString();
-        final value = fn['amount'] ?? fn['value']);
+        final name = (nutrient?['name'] ?? fn['nutrientName'])?.toString();
+        final value = fn['amount'] ?? fn['value'];
         if (name != null &&
             wantedNames
                 .map((s) => s.toLowerCase())

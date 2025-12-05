@@ -167,7 +167,7 @@ class _BudgetRingChartState extends State<BudgetRingChart>
   @override
   Widget build(BuildContext context) {
     final showChart = _hasSlices;
-    final pillH = _pillSize?.height ?? 44.0);
+    final pillH = _pillSize?.height ?? 44.0;
 
     // Make sure these are typed as double, not num.
     final areaHeight = showChart ? widget.ringSize : (pillH + 12.0);

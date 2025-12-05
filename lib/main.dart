@@ -29,7 +29,7 @@ import 'package:kontinuum/app.dart';
 // Providers
 import 'package:kontinuum/providers/objective_provider.dart';
 import 'package:kontinuum/providers/mission_provider.dart';
-import 'package:kontinuum/providers/workout_provider.dart';
+import 'package:kontinuum/providers/workout_provider.dart' show WorkoutProvider;
 import 'package:kontinuum/providers/diet_provider.dart';
 import 'package:kontinuum/providers/fitness_profile_provider.dart';
 import 'package:kontinuum/providers/budget_provider.dart';

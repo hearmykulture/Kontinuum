@@ -142,15 +142,15 @@ DateTime? nextOccurrenceForExpense(
     case BudgetTimeSpan.weekly:
       final start = base;
       final end = start.add(const Duration(days: 6));
-      return start, end;
+      return (start, end);
     case BudgetTimeSpan.monthly:
       final start = base;
       final end = start.add(const Duration(days: 29));
-      return start, end;
+      return (start, end);
     case BudgetTimeSpan.yearly:
       final start = base;
       final end = start.add(const Duration(days: 364));
-      return start, end;
+      return (start, end);
     case BudgetTimeSpan.custom:
       var start = customStart != null ? _dateOnly(customStart) : base;
       var end = customEnd != null ? _dateOnly(customEnd) : base;
@@ -159,7 +159,7 @@ DateTime? nextOccurrenceForExpense(
         start = end;
         end = tmp;
       }
-      return start, end;
+      return (start, end);
   }
 }
 
@@ -234,7 +234,7 @@ Map<String, int> categoryTotalsInWindow(
     if (cents == 0) continue;
 
     final catName = exp.category?.name ?? 'Uncategorized';
-    result[catName] = result[catName] ?? 0) + cents;
+    result[catName] = (result[catName] ?? 0) + cents;
   }
 
   return result;
@@ -314,8 +314,8 @@ List<DateTime> _yearlyOccurrencesInWindow(
   final result = <DateTime>[];
 
   // Fallbacks: if month/day are missing, anchor to the start date.
-  final month = expense.yearlyMonth ?? start.month).clamp(1, 12);
-  final rawDay = expense.yearlyDay ?? start.day).clamp(1, 31);
+  final month = (expense.yearlyMonth ?? start.month).clamp(1, 12);
+  final rawDay = (expense.yearlyDay ?? start.day).clamp(1, 31);
 
   for (int year = start.year;
       year <= end.year && result.length < maxOccurrences;

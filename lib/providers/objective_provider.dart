@@ -475,14 +475,14 @@ class ObjectiveProvider with ChangeNotifier {
           name: _categories[id]!.name,
           xp: _categories[id]!.xp,
           skills: _categories[id]!.skills,
-          colorInt: color.value,
+          colorInt: color.toARGB32(),
         );
         Future.microtask(() => _hiveService.saveCategories(_categories));
         notifyListeners();
       }
       return;
     }
-    _categories[id] = Category(id: id, name: nameOrId, colorInt: color?.value);
+    _categories[id] = Category(id: id, name: nameOrId, colorInt: color?.toARGB32());
     Future.microtask(() => _hiveService.saveCategories(_categories));
     notifyListeners();
   }
@@ -889,7 +889,7 @@ class ObjectiveProvider with ChangeNotifier {
     final result = <String, int>{};
     for (final entry in _statHistory) {
       if (cutoff == null || entry.date.isAfter(cutoff)) {
-        result[entry.statId] = result[entry.statId] ?? 0) + entry.amount;
+        result[entry.statId] = (result[entry.statId] ?? 0) + entry.amount;
       }
     }
     return result;
@@ -901,7 +901,7 @@ class ObjectiveProvider with ChangeNotifier {
     final deltaMap = <String, int>{};
     for (final entry in _statHistory) {
       if (entry.date.isAfter(start)) {
-        deltaMap[entry.statId] = deltaMap[entry.statId] ?? 0) + entry.amount;
+        deltaMap[entry.statId] = (deltaMap[entry.statId] ?? 0) + entry.amount;
       }
     }
     return deltaMap;

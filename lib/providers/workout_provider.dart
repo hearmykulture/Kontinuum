@@ -1129,7 +1129,7 @@ class WorkoutProvider extends ChangeNotifier {
       );
       double vol = 0;
       for (final s in state.sets) {
-        vol += s.load ?? 0) * (s.reps ?? 0);
+        vol += (s.load ?? 0) * (s.reps ?? 0);
         debugPrint(
           '[WorkoutProvider]     - set: load=${s.load}, reps=${s.reps}, vol=${(s.load ?? 0) * (s.reps ?? 0)}',
         );
@@ -1602,14 +1602,14 @@ class WorkoutProvider extends ChangeNotifier {
     for (final muscle in exercise.primaryMuscles) {
       final axis = _axisForMuscle(muscle);
       if (axis == null) continue;
-      totals[axis] = totals[axis] ?? 0.0) + primaryWeight * weightMultiplier;
+      totals[axis] = (totals[axis] ?? 0.0) + primaryWeight * weightMultiplier;
       tracked = true;
     }
 
     for (final muscle in exercise.secondaryMuscles) {
       final axis = _axisForMuscle(muscle);
       if (axis == null) continue;
-      totals[axis] = totals[axis] ?? 0.0) + secondaryWeight * weightMultiplier;
+      totals[axis] = (totals[axis] ?? 0.0) + secondaryWeight * weightMultiplier;
       tracked = true;
     }
 
@@ -1838,7 +1838,7 @@ class WorkoutProvider extends ChangeNotifier {
       if (!out.containsKey(key)) {
         out[key] = log.totals.volume;
       } else {
-        out[key] = out[key] ?? 0) + log.totals.volume;
+        out[key] = (out[key] ?? 0) + log.totals.volume;
       }
     }
 

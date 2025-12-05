@@ -467,19 +467,19 @@ class WorkoutProgressService {
 
     try {
       if ((log as dynamic).date is DateTime) {
-        return log as dynamic.date as DateTime;
+        return (log as dynamic).date as DateTime;
       }
     } catch (_) {}
 
     try {
       if ((log as dynamic).startedAt is DateTime) {
-        return log as dynamic.startedAt as DateTime;
+        return (log as dynamic).startedAt as DateTime;
       }
     } catch (_) {}
 
     try {
       if ((log as dynamic).completedAt is DateTime) {
-        return log as dynamic.completedAt as DateTime;
+        return (log as dynamic).completedAt as DateTime;
       }
     } catch (_) {}
 
@@ -634,7 +634,7 @@ class WorkoutProgressService {
       }
 
       for (final item in block.items) {
-        final int sets = item.targetSets ?? 0;
+        final int sets = item.targetSets;
         if (sets > 0) {
           total += sets;
         }

@@ -296,23 +296,6 @@ class DietProvider extends ChangeNotifier {
     return list.fold<int>(0, (sum, e) => sum + e.calories);
   }
 
-  /// For Insights: get last [days] days including [anchor] (usually AppClock.now()).
-  List<_DayCalories> lastNDaysCalories(int days, DateTime anchor) {
-    final out = <_DayCalories>[];
-    for (int i = 0; i < days; i++) {
-      final d = DateTime(anchor.year, anchor.month, anchor.day)
-          .subtract(Duration(days: i));
-      out.add(
-        _DayCalories(
-          date: d,
-          calories: caloriesForDay(d),
-          target: _goal.caloriesTarget ?? 0,
-        ),
-      );
-    }
-    return out;
-  }
-
   Future<void> addEntry({
     required DateTime date,
     required MealSlot slot,
@@ -597,10 +580,10 @@ class DietProvider extends ChangeNotifier {
     double servings = 1.0,
   }) {
     final mult = servings;
-    final kcal = item.calories ?? 0) * mult;
-    final p = item.protein ?? 0) * mult;
-    final c = item.carbs ?? 0) * mult;
-    final f = item.fat ?? 0) * mult;
+    final kcal = (item.calories ?? 0) * mult;
+    final p = (item.protein ?? 0) * mult;
+    final c = (item.carbs ?? 0) * mult;
+    final f = (item.fat ?? 0) * mult;
 
     return DietEntry(
       id: 'fdc-${item.fdcId}-${AppClock.now().millisecondsSinceEpoch}',
@@ -757,18 +740,6 @@ class DietProvider extends ChangeNotifier {
     final r = Random();
     return '${AppClock.now().millisecondsSinceEpoch}_${r.nextInt(999999)}';
   }
-}
-
-// simple struct for insights
-class _DayCalories {
-  final DateTime date;
-  final int calories;
-  final int target;
-  _DayCalories({
-    required this.date,
-    required this.calories,
-    required this.target,
-  });
 }
 
 /// SINGLE source of truth for meal-slot helpers

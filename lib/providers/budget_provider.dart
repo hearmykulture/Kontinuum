@@ -118,6 +118,29 @@ class Budget {
     );
   }
 
+  /// Static method to normalize a monthly amount for a given time span.
+  static int normalizeMonthlyAmountForSpan(
+    int monthlyAmountCents,
+    BudgetTimeSpan span, {
+    DateTime? spanStart,
+    DateTime? spanEnd,
+  }) {
+    switch (span) {
+      case BudgetTimeSpan.weekly:
+        return (monthlyAmountCents / 4).round();
+      case BudgetTimeSpan.monthly:
+        return monthlyAmountCents;
+      case BudgetTimeSpan.yearly:
+        return monthlyAmountCents * 12;
+      case BudgetTimeSpan.custom:
+        if (spanStart == null || spanEnd == null) {
+          return monthlyAmountCents;
+        }
+        final days = spanEnd.difference(spanStart).inDays + 1;
+        return ((monthlyAmountCents / 30) * days).round();
+    }
+  }
+
   // Convert to Hive model
   BudgetHive toHive() {
     return BudgetHive(
@@ -173,7 +196,7 @@ class Budget {
     return BudgetCategoryHive(
       name: cat.name,
       iconCodePoint: cat.icon.codePoint,
-      colorValue: cat.color.value,
+      colorValue: cat.color.toARGB32(),
     );
   }
 
@@ -205,7 +228,7 @@ class Budget {
       amountCents: rec.amountCents,
       cadence: cadenceIndex,
       iconCodePoint: rec.icon.codePoint,
-      colorValue: rec.color.value,
+      colorValue: rec.color.toARGB32(),
       categoryName: rec.category?.name, // persist category by name
       // cadence metadata:
       weekdayMask: _encodeWeekdays(rec.weeklyWeekdays),
@@ -245,9 +268,9 @@ class Budget {
       color: hive.color,
       category: category, // reattached on load
       weeklyWeekdays: weeklyDays,
-      monthlyDay: hive.monthlyDay,
-      yearlyMonth: hive.yearlyMonth,
-      yearlyDay: hive.yearlyDay,
+      monthlyDay: hive.monthlyDay ?? 1,
+      yearlyMonth: hive.yearlyMonth ?? 1,
+      yearlyDay: hive.yearlyDay ?? 1,
     );
   }
 

@@ -4,6 +4,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:plaid_flutter/plaid_flutter.dart';
+import 'package:kontinuum/ui/screens/budget/models/budget_models.dart';
 
 typedef LinkResult = ({
   String? itemId,
@@ -258,6 +259,54 @@ class BankLinkService {
     _successSub = null;
     _eventSub = null;
     _exitSub = null;
+  }
+
+  /// Fetch account balances (stub implementation)
+  Future<Map<String, dynamic>> fetchBalances() async {
+    return _tryBases<Map<String, dynamic>>((base) async {
+      final uri = Uri.parse('$base/accounts/balances');
+      final res = await http.get(
+        uri,
+        headers: {'content-type': 'application/json'},
+      );
+      if (res.statusCode != 200) {
+        throw Exception('fetchBalances ${res.statusCode}: ${res.body}');
+      }
+      return json.decode(res.body) as Map<String, dynamic>;
+    });
+  }
+
+  /// Fetch cash flow snapshot (stub implementation)
+  Future<CashFlowSnapshot> fetchCashFlowSnapshot({
+    required DateTime from,
+    required DateTime to,
+    String? accountType,
+    String? flow,
+    String? category,
+    String? query,
+    int? limit,
+  }) async {
+    return _tryBases<CashFlowSnapshot>((base) async {
+      final params = <String, String>{
+        'from': from.toIso8601String(),
+        'to': to.toIso8601String(),
+        if (accountType != null) 'accountType': accountType,
+        if (flow != null) 'flow': flow,
+        if (category != null) 'category': category,
+        if (query != null) 'query': query,
+        if (limit != null) 'limit': limit.toString(),
+      };
+      final uri = Uri.parse('$base/transactions').replace(queryParameters: params);
+      final res = await http.get(
+        uri,
+        headers: {'content-type': 'application/json'},
+      );
+      if (res.statusCode != 200) {
+        throw Exception('fetchCashFlowSnapshot ${res.statusCode}: ${res.body}');
+      }
+      // Stub: return empty snapshot
+      return CashFlowSnapshot();
+    });
   }
 
   Future<void> dispose() => _cancelListeners();

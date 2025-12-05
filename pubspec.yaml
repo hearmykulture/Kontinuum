@@ -53,6 +53,11 @@ dependencies:
   # ✨ Lottie animations
   lottie: ^3.0.0
 
+  # Quill & Keyboard visibility platform interfaces
+  flutter_keyboard_visibility_platform_interface: ^2.0.0
+  quill_native_bridge: ^11.1.0
+  quill_native_bridge_platform_interface: ^0.0.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

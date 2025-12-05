@@ -63,7 +63,7 @@ bool _accumulateMuscles({
   for (final muscle in muscles) {
     final String? axis = _axisForMuscle(muscle);
     if (axis == null) continue;
-    totals[axis] = totals[axis] ?? 0.0) + weight;
+    totals[axis] = (totals[axis] ?? 0.0) + weight;
     any = true;
   }
   return any;

@@ -336,7 +336,7 @@ class Workout extends HiveObject {
 extension WorkoutBlockExtensions on WorkoutBlock {
   bool get isBreakBlock {
     if (type != null) return false;
-    final noteText = note ?? '').toLowerCase();
+    final noteText = (note ?? '').toLowerCase();
     return noteText.startsWith('duration:') && noteText.contains('type:');
   }
 
@@ -416,10 +416,9 @@ class Routine extends HiveObject {
     required this.diet,
     required this.workoutIds,
     required this.createdAtMs,
-    RestSchedule? restSchedule,
+    this.restSchedule,
     RepetitionMode? scheduleMode,
-  })  : restSchedule = restSchedule,
-        scheduleMode =
+  })  : scheduleMode =
             scheduleMode ?? restSchedule?.mode ?? RepetitionMode.weekly {
     if (this.restSchedule != null &&
         this.restSchedule!.mode != this.scheduleMode) {
