@@ -437,7 +437,7 @@ class _MiniCalendarSheetState extends State<MiniCalendarSheet> {
 
                                   final Color fg = inDisplayedMonth
                                       ? _text
-                                      : _muted.withOpacity(
+                                      : _muted.withValues(alpha: 
                                           0.35); // ↓↓ replaced .withValues
 
                                   BoxDecoration deco;
@@ -451,7 +451,7 @@ class _MiniCalendarSheetState extends State<MiniCalendarSheet> {
                                       ),
                                       boxShadow: [
                                         BoxShadow(
-                                          color: Colors.white.withOpacity(0.06),
+                                          color: Colors.white.withValues(alpha: 0.06),
                                           // ^ replaced .withValues(alpha: 0.06)
                                           blurRadius: 12,
                                         ),

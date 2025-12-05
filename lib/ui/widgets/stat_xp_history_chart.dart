@@ -72,7 +72,7 @@ class StatXpHistoryChart extends StatelessWidget {
                 barWidth: 3,
                 belowBarData: BarAreaData(
                   show: true,
-                  color: Colors.deepPurpleAccent.withOpacity(0.2),
+                  color: Colors.deepPurpleAccent.withValues(alpha: 0.2),
                 ),
                 dotData: const FlDotData(show: false),
               ),

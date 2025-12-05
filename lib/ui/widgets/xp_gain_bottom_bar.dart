@@ -246,7 +246,7 @@ class _XpGainOverlayState extends State<_XpGainOverlay>
                             "$shownXp / $next XP",
                             textAlign: TextAlign.center,
                             style: TextStyle(
-                              color: widget.color.withOpacity(0.85),
+                              color: widget.color.withValues(alpha: 0.85),
                               fontSize: 12,
                               decoration: TextDecoration.none,
                             ),
@@ -275,12 +275,12 @@ class _BottomCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFF141622).withOpacity(0.96),
+        color: const Color(0xFF141622).withValues(alpha: 0.96),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: color.withOpacity(0.65), width: 1),
+        border: Border.all(color: color.withValues(alpha: 0.65), width: 1),
         boxShadow: [
           BoxShadow(
-            color: color.withOpacity(0.32),
+            color: color.withValues(alpha: 0.32),
             blurRadius: 20,
             spreadRadius: 1,
             offset: const Offset(0, 8),

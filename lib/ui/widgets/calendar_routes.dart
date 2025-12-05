@@ -27,7 +27,7 @@ class _HeroSheetRoute<T> extends PageRoute<T> {
   bool get barrierDismissible => _barrierDismissible;
 
   @override
-  Color? get barrierColor => Colors.black.withOpacity(0.5);
+  Color? get barrierColor => Colors.black.withValues(alpha: 0.5);
 
   @override
   String? get barrierLabel => 'Dismiss';

@@ -94,7 +94,7 @@ class CategoryLegend extends StatelessWidget {
                   color: c.color,
                   borderRadius: BorderRadius.circular(3),
                   border: Border.all(
-                    color: Colors.black.withOpacity(0.15),
+                    color: Colors.black.withValues(alpha: 0.15),
                     width: 1,
                   ),
                 ),
@@ -146,7 +146,7 @@ class PillButton extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(24),
-          overlayColor: WidgetStatePropertyAll(Colors.white.withOpacity(0.06)),
+          overlayColor: WidgetStatePropertyAll(Colors.white.withValues(alpha: 0.06)),
           child: Ink(
             decoration: BoxDecoration(
               color: bg,
@@ -217,7 +217,7 @@ class ColorRail extends StatelessWidget {
                 color: c,
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: sel ? Colors.white : Colors.white.withOpacity(0.25),
+                  color: sel ? Colors.white : Colors.white.withValues(alpha: 0.25),
                   width: sel ? 2 : 1,
                 ),
               ),
@@ -249,15 +249,15 @@ class CloseFab extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           customBorder: const CircleBorder(),
-          overlayColor: WidgetStatePropertyAll(Colors.white.withOpacity(0.08)),
+          overlayColor: WidgetStatePropertyAll(Colors.white.withValues(alpha: 0.08)),
           child: Container(
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.06),
+              color: Colors.white.withValues(alpha: 0.06),
               shape: BoxShape.circle,
               border: Border.all(
-                color: BudgetTheme.mint.withOpacity(0.5),
+                color: BudgetTheme.mint.withValues(alpha: 0.5),
                 width: 1,
               ),
             ),
@@ -338,9 +338,9 @@ class OptionGroup extends StatelessWidget {
       borderRadius: radius,
       child: Container(
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.06),
+          color: Colors.white.withValues(alpha: 0.06),
           borderRadius: radius,
-          border: Border.all(color: Colors.white.withOpacity(0.10), width: 1),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10), width: 1),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -587,7 +587,7 @@ class OptionGroup extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        overlayColor: WidgetStatePropertyAll(Colors.white.withOpacity(0.06)),
+        overlayColor: WidgetStatePropertyAll(Colors.white.withValues(alpha: 0.06)),
         onTap: onTap,
         child: Padding(
           padding:
@@ -617,10 +617,10 @@ class OptionGroup extends StatelessWidget {
                 height: _boxSize,
                 child: DecoratedBox(
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.08),
+                    color: Colors.white.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(_boxRadius),
                     border: Border.all(
-                      color: Colors.white.withOpacity(0.14),
+                      color: Colors.white.withValues(alpha: 0.14),
                       width: 1,
                     ),
                   ),
@@ -650,15 +650,15 @@ class OptionGroup extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(_boxRadius),
-          overlayColor: WidgetStatePropertyAll(Colors.white.withOpacity(0.06)),
+          overlayColor: WidgetStatePropertyAll(Colors.white.withValues(alpha: 0.06)),
           child: Ink(
             width: _boxSize,
             height: _boxSize,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.08),
+              color: Colors.white.withValues(alpha: 0.08),
               borderRadius: BorderRadius.circular(_boxRadius),
               border:
-                  Border.all(color: Colors.white.withOpacity(0.14), width: 1),
+                  Border.all(color: Colors.white.withValues(alpha: 0.14), width: 1),
             ),
             child: Center(
               child: Icon(icon, size: 20, color: BudgetTheme.mint),
@@ -676,7 +676,7 @@ class OptionGroup extends StatelessWidget {
         margin: EdgeInsets.only(right: cutoutPx),
         padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
-          color: const Color(0xFFB00020).withOpacity(0.9),
+          color: const Color(0xFFB00020).withValues(alpha: 0.9),
           borderRadius: const BorderRadius.only(
             topRight: Radius.circular(_boxRadius),
             bottomRight: Radius.circular(_boxRadius),

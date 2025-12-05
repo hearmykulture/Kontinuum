@@ -89,7 +89,7 @@ class _CategoryCreatorSheetState extends State<CategoryCreatorSheet> {
                   width: 36,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.25),
+                    color: Colors.white.withValues(alpha: 0.25),
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -120,16 +120,16 @@ class _CategoryCreatorSheetState extends State<CategoryCreatorSheet> {
                       fontWeight: FontWeight.w600,
                     ),
                     filled: true,
-                    fillColor: Colors.white.withOpacity(0.06),
+                    fillColor: Colors.white.withValues(alpha: 0.06),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(14),
                       borderSide:
-                          BorderSide(color: Colors.white.withOpacity(0.12)),
+                          BorderSide(color: Colors.white.withValues(alpha: 0.12)),
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(14),
                       borderSide:
-                          BorderSide(color: Colors.white.withOpacity(0.12)),
+                          BorderSide(color: Colors.white.withValues(alpha: 0.12)),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(14),
@@ -152,7 +152,7 @@ class _CategoryCreatorSheetState extends State<CategoryCreatorSheet> {
                     child: Text(
                       'Icon',
                       style: TextStyle(
-                        color: Colors.white.withOpacity(0.75),
+                        color: Colors.white.withValues(alpha: 0.75),
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -172,12 +172,12 @@ class _CategoryCreatorSheetState extends State<CategoryCreatorSheet> {
                         width: 52,
                         height: 52,
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(sel ? 0.12 : 0.06),
+                          color: Colors.white.withValues(alpha: sel ? 0.12 : 0.06),
                           borderRadius: BorderRadius.circular(14),
                           border: Border.all(
                             color: sel
                                 ? BudgetTheme.mint
-                                : Colors.white.withOpacity(0.12),
+                                : Colors.white.withValues(alpha: 0.12),
                             width: 1,
                           ),
                         ),
@@ -198,7 +198,7 @@ class _CategoryCreatorSheetState extends State<CategoryCreatorSheet> {
                     child: Text(
                       'Color',
                       style: TextStyle(
-                        color: Colors.white.withOpacity(0.75),
+                        color: Colors.white.withValues(alpha: 0.75),
                         fontWeight: FontWeight.w700,
                       ),
                     ),

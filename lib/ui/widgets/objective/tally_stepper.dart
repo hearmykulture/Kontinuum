@@ -273,7 +273,7 @@ class _TallyStepperState extends State<TallyStepper>
                   child: IgnorePointer(
                     child: Container(
                       decoration: BoxDecoration(
-                        color: _flashColor.withOpacity(flashOpacity),
+                        color: _flashColor.withValues(alpha: flashOpacity),
                         borderRadius: BorderRadius.circular(widget.radius),
                       ),
                     ),
@@ -350,7 +350,7 @@ class RipplePainter extends CustomPainter {
     final paint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2 + 2 * progress
-      ..color = color.withOpacity((1 - progress).clamp(0.0, 1.0) * 0.35);
+      ..color = color.withValues(alpha: (1 - progress).clamp(0.0, 1.0) * 0.35);
 
     canvas.drawRRect(ring, paint);
   }

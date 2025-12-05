@@ -398,7 +398,7 @@ class _ActionButton extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(16),
-          overlayColor: WidgetStatePropertyAll(Colors.white.withOpacity(0.06)),
+          overlayColor: WidgetStatePropertyAll(Colors.white.withValues(alpha: 0.06)),
           child: Ink(
             width: 280,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -406,7 +406,7 @@ class _ActionButton extends StatelessWidget {
               color: BudgetScreenV2.kButtonGreen,
               borderRadius: BorderRadius.circular(16),
               border: Border.all(
-                color: Colors.white.withOpacity(0.15),
+                color: Colors.white.withValues(alpha: 0.15),
                 width: 1,
               ),
             ),
@@ -478,7 +478,7 @@ class _AddSquare extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(cornerRadius),
-          overlayColor: WidgetStatePropertyAll(Colors.white.withOpacity(0.06)),
+          overlayColor: WidgetStatePropertyAll(Colors.white.withValues(alpha: 0.06)),
           child: Ink(
             key: measureKey,
             width: size,
@@ -514,15 +514,15 @@ class _CloseButton extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           customBorder: const CircleBorder(),
-          overlayColor: WidgetStatePropertyAll(Colors.white.withOpacity(0.08)),
+          overlayColor: WidgetStatePropertyAll(Colors.white.withValues(alpha: 0.08)),
           child: Container(
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.06),
+              color: Colors.white.withValues(alpha: 0.06),
               shape: BoxShape.circle,
               border: Border.all(
-                color: BudgetScreenV2.kPlusMint.withOpacity(0.5),
+                color: BudgetScreenV2.kPlusMint.withValues(alpha: 0.5),
                 width: 1,
               ),
             ),
@@ -670,7 +670,7 @@ class _FlashTextState extends State<_FlashText>
                   shadows: glow > 0.01
                       ? [
                           Shadow(
-                            color: widget.color.withOpacity(glowOpacity),
+                            color: widget.color.withValues(alpha: glowOpacity),
                             blurRadius: glow,
                           )
                         ]

@@ -345,7 +345,7 @@ class _MiniDayHourSheetState extends State<MiniDayHourSheet> {
               final isToday = _sameDay(day, today);
 
               // base color for day number
-              final fg = inDisplayed ? _text : _muted.withOpacity(0.35);
+              final fg = inDisplayed ? _text : _muted.withValues(alpha: 0.35);
 
               BoxDecoration deco;
               if (isStart && isEnd) {
@@ -360,7 +360,7 @@ class _MiniDayHourSheetState extends State<MiniDayHourSheet> {
                   color: _accent,
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.25),
+                      color: Colors.black.withValues(alpha: 0.25),
                       blurRadius: 10,
                     ),
                   ],

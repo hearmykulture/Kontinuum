@@ -539,7 +539,7 @@ class _AllMissionsTab extends StatelessWidget {
                       ),
                       foregroundColor: const Color(0xFF6C63FF),
                       side: BorderSide(
-                        color: const Color(0xFF6C63FF).withOpacity(0.6),
+                        color: const Color(0xFF6C63FF).withValues(alpha: 0.6),
                       ),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(14),
@@ -569,14 +569,14 @@ class _AllMissionsTab extends StatelessWidget {
                 isCompleted ? const Color(0xFF0D2218) : const Color(0xFF2D2B5F);
             final titleColor = isCompleted ? Colors.white70 : Colors.white;
             final rarityColor =
-                isCompleted ? color.withOpacity(0.55) : color;
+                isCompleted ? color.withValues(alpha: 0.55) : color;
             final xpColor = isCompleted
-                ? Colors.cyanAccent.withOpacity(0.55)
+                ? Colors.cyanAccent.withValues(alpha: 0.55)
                 : Colors.cyanAccent;
             final metaColor =
                 isCompleted ? Colors.white54 : Colors.white70;
             final acceptedColor = isCompleted
-                ? Colors.amberAccent.withOpacity(0.55)
+                ? Colors.amberAccent.withValues(alpha: 0.55)
                 : Colors.amberAccent;
 
             return Padding(
@@ -588,7 +588,7 @@ class _AllMissionsTab extends StatelessWidget {
                   alignment: Alignment.centerLeft,
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFE53935).withOpacity(0.9),
+                    color: const Color(0xFFE53935).withValues(alpha: 0.9),
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: const Icon(Icons.delete_outline, color: Colors.white),
@@ -597,7 +597,7 @@ class _AllMissionsTab extends StatelessWidget {
                   alignment: Alignment.centerRight,
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFE53935).withOpacity(0.9),
+                    color: const Color(0xFFE53935).withValues(alpha: 0.9),
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: const Icon(Icons.delete_outline, color: Colors.white),
@@ -689,20 +689,20 @@ class _AllMissionsTab extends StatelessWidget {
                             if (m.categoryIds.isNotEmpty)
                               _chip(
                                 m.categoryIds.first.toUpperCase(),
-                                border: metaColor.withOpacity(0.3),
+                                border: metaColor.withValues(alpha: 0.3),
                                 text: metaColor,
                               ),
                             if (m.categoryIds.length > 1)
                               _chip(
                                 '${m.categoryIds.length - 1} more',
-                                border: metaColor.withOpacity(0.3),
+                                border: metaColor.withValues(alpha: 0.3),
                                 text: metaColor,
                               ),
                             if (m.isCompleted)
                               _chip(
                                 'COMPLETED',
-                                border: Colors.greenAccent.withOpacity(0.55),
-                                text: Colors.greenAccent.withOpacity(0.55),
+                                border: Colors.greenAccent.withValues(alpha: 0.55),
+                                text: Colors.greenAccent.withValues(alpha: 0.55),
                               ),
                             if (m.isAccepted)
                               _chip(

@@ -103,7 +103,7 @@ class _MissionCardState extends State<MissionCard>
               color: const Color(0xFF161925),
               borderRadius: BorderRadius.circular(12),
               border:
-                  Border.all(color: rarityColor.withOpacity(0.5), width: 1.2),
+                  Border.all(color: rarityColor.withValues(alpha: 0.5), width: 1.2),
             ),
           ),
         ),
@@ -220,7 +220,7 @@ class _MissionCardState extends State<MissionCard>
                                 vertical: 2,
                               ),
                               decoration: BoxDecoration(
-                                color: Colors.deepPurpleAccent.withOpacity(0.6),
+                                color: Colors.deepPurpleAccent.withValues(alpha: 0.6),
                                 borderRadius: BorderRadius.circular(6),
                               ),
                               child: const Text("🧠",

@@ -577,7 +577,7 @@ class _GoalSegment extends StatelessWidget {
         child: Text(
           label,
           style: TextStyle(
-            color: selected ? Colors.black : Colors.white.withOpacity(.72),
+            color: selected ? Colors.black : Colors.white.withValues(alpha: .72),
             fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
             fontSize: 13.5,
           ),

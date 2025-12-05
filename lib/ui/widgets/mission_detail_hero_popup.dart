@@ -26,8 +26,8 @@ class MissionDetailHeroPopup extends StatelessWidget {
 
     // ✅ Border reflects acceptance (green like the grid card)
     final Color borderColor = mission.isAccepted
-        ? Colors.greenAccent.withOpacity(0.75)
-        : Colors.deepPurpleAccent.withOpacity(0.5);
+        ? Colors.greenAccent.withValues(alpha: 0.75)
+        : Colors.deepPurpleAccent.withValues(alpha: 0.5);
 
     return RepaintBoundary(
       child: Material(
@@ -43,7 +43,7 @@ class MissionDetailHeroPopup extends StatelessWidget {
               child: Container(
                 width: double.infinity,
                 height: double.infinity,
-                color: Colors.black.withOpacity(0.55),
+                color: Colors.black.withValues(alpha: 0.55),
               ),
             ),
 
@@ -64,7 +64,7 @@ class MissionDetailHeroPopup extends StatelessWidget {
                         color: const Color(0xFF161925),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: _rarityColor(mission).withOpacity(0.5),
+                          color: _rarityColor(mission).withValues(alpha: 0.5),
                           width: 1.2,
                         ),
                       ),
@@ -83,7 +83,7 @@ class MissionDetailHeroPopup extends StatelessWidget {
                     ),
                     padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF161925).withOpacity(0.95),
+                      color: const Color(0xFF161925).withValues(alpha: 0.95),
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(color: borderColor, width: 1.7), // ✅
                     ),
@@ -113,7 +113,7 @@ class MissionDetailHeroPopup extends StatelessWidget {
                                 vertical: 6,
                               ),
                               decoration: BoxDecoration(
-                                color: Colors.deepPurpleAccent.withOpacity(0.8),
+                                color: Colors.deepPurpleAccent.withValues(alpha: 0.8),
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: const Text(
@@ -175,7 +175,7 @@ class MissionDetailHeroPopup extends StatelessWidget {
                                   vertical: 4,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: _rarityColor(mission).withOpacity(0.2),
+                                  color: _rarityColor(mission).withValues(alpha: 0.2),
                                   border: Border.all(
                                     color: _rarityColor(mission),
                                     width: 1.2,

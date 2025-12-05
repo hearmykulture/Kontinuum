@@ -1304,7 +1304,7 @@ class _RescheduleSheetState extends State<_RescheduleSheet> {
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
                           color: selected
-                              ? Colors.blueAccent.withOpacity(0.7)
+                              ? Colors.blueAccent.withValues(alpha: 0.7)
                               : Colors.white.withValues(alpha: .12),
                         ),
                       ),
@@ -1425,7 +1425,7 @@ class _DayCircle extends StatelessWidget {
           child: CircularProgressIndicator(
             value: clamped == 0 ? 0.01 : clamped,
             strokeWidth: 3,
-            backgroundColor: Colors.white.withOpacity(0.08),
+            backgroundColor: Colors.white.withValues(alpha: 0.08),
             valueColor: AlwaysStoppedAnimation<Color>(ring),
           ),
         ),
@@ -2792,7 +2792,7 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
                                                 alignment:
                                                     Alignment.centerLeft,
                                                 color: Colors.orange
-                                                    .withOpacity(.25),
+                                                    .withValues(alpha: .25),
                                                 icon: Icons.snooze_rounded,
                                                 label: 'Snooze',
                                               ),
@@ -2801,7 +2801,7 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
                                                 alignment:
                                                     Alignment.centerRight,
                                                 color: Colors.red
-                                                    .withOpacity(.25),
+                                                    .withValues(alpha: .25),
                                                 icon: Icons.close_rounded,
                                                 label: 'Dismiss',
                                               ),
@@ -2884,10 +2884,10 @@ class _NotificationPill extends StatelessWidget {
   Color _severityColor() {
     switch (item.severity) {
       case NotificationSeverity.critical:
-        return Colors.redAccent.withOpacity(0.9);
+        return Colors.redAccent.withValues(alpha: 0.9);
       case NotificationSeverity.nonCritical:
       default:
-        return Colors.white.withOpacity(0.28);
+        return Colors.white.withValues(alpha: 0.28);
     }
   }
 
@@ -2901,7 +2901,7 @@ class _NotificationPill extends StatelessWidget {
         color: Colors.white.withValues(alpha: .08),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: railColor.withOpacity(0.4),
+          color: railColor.withValues(alpha: 0.4),
           width: 1,
         ),
       ),
@@ -2936,7 +2936,7 @@ class _NotificationPill extends StatelessWidget {
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 7, vertical: 2),
                                   decoration: BoxDecoration(
-                                    color: accent.withOpacity(0.14),
+                                    color: accent.withValues(alpha: 0.14),
                                     borderRadius: BorderRadius.circular(7),
                                   ),
                                   child: Row(
@@ -2966,7 +2966,7 @@ class _NotificationPill extends StatelessWidget {
                                     padding: const EdgeInsets.symmetric(
                                         horizontal: 6, vertical: 2.5),
                                     decoration: BoxDecoration(
-                                      color: Colors.white.withOpacity(0.08),
+                                      color: Colors.white.withValues(alpha: 0.08),
                                       borderRadius: BorderRadius.circular(7),
                                     ),
                                     child: Text(
@@ -3048,7 +3048,7 @@ class _NotificationPill extends StatelessWidget {
                                         MaterialTapTargetSize.shrinkWrap,
                                     foregroundColor: Colors.white,
                                     side: BorderSide(
-                                      color: Colors.white.withOpacity(0.24),
+                                      color: Colors.white.withValues(alpha: 0.24),
                                     ),
                                     padding: const EdgeInsets.symmetric(
                                       horizontal: 10,

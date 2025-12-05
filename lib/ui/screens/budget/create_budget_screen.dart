@@ -228,7 +228,7 @@ class _CreateBudgetScreenState extends State<CreateBudgetScreen>
       _scaffold?.clearSnackBars();
       _scaffold?.showSnackBar(
         SnackBar(
-          backgroundColor: Colors.black.withOpacity(0.9),
+          backgroundColor: Colors.black.withValues(alpha: 0.9),
           content: Text(
             'You’re over budget by $over.',
             style: const TextStyle(color: Colors.white),
@@ -304,7 +304,7 @@ class _CreateBudgetScreenState extends State<CreateBudgetScreen>
         _scaffold?.clearSnackBars();
         _scaffold?.showSnackBar(
           SnackBar(
-            backgroundColor: Colors.black.withOpacity(0.9),
+            backgroundColor: Colors.black.withValues(alpha: 0.9),
             content: Text(
               'You’re over budget by $over.',
               style: const TextStyle(color: Colors.white),
@@ -329,7 +329,7 @@ class _CreateBudgetScreenState extends State<CreateBudgetScreen>
     _scaffold?.clearSnackBars();
     _scaffold?.showSnackBar(
       SnackBar(
-        backgroundColor: Colors.black.withOpacity(0.85),
+        backgroundColor: Colors.black.withValues(alpha: 0.85),
         content: Text('Deleted "${removed.name}"',
             style: const TextStyle(color: Colors.white)),
         action: SnackBarAction(
@@ -354,7 +354,7 @@ class _CreateBudgetScreenState extends State<CreateBudgetScreen>
     _scaffold?.clearSnackBars();
     _scaffold?.showSnackBar(
       SnackBar(
-        backgroundColor: Colors.black.withOpacity(0.85),
+        backgroundColor: Colors.black.withValues(alpha: 0.85),
         content: Text('Deleted "${removed.name}"',
             style: const TextStyle(color: Colors.white)),
         action: SnackBarAction(
@@ -567,7 +567,7 @@ class _CreateBudgetScreenState extends State<CreateBudgetScreen>
                                                   painter: RingPainter(
                                                     sweepRadians: sweep,
                                                     trackColor: Colors.white
-                                                        .withOpacity(0.10),
+                                                        .withValues(alpha: 0.10),
                                                     ringColor: BudgetTheme.mint,
                                                     stroke: _ringStroke,
                                                     cap: StrokeCap.round,
@@ -617,7 +617,7 @@ class _CreateBudgetScreenState extends State<CreateBudgetScreen>
                                                     splitT: _divide.value,
                                                     stroke: _ringStroke,
                                                     trackColor: Colors.white
-                                                        .withOpacity(0.10),
+                                                        .withValues(alpha: 0.10),
                                                     gapRadians: 0.018,
                                                   ),
                                                 );
@@ -633,7 +633,7 @@ class _CreateBudgetScreenState extends State<CreateBudgetScreen>
                                                   splitT: _divide.value,
                                                   stroke: _ringStroke,
                                                   trackColor: Colors.white
-                                                      .withOpacity(0.10),
+                                                      .withValues(alpha: 0.10),
                                                   gapRadians: 0.018,
                                                 ),
                                               );
@@ -684,10 +684,10 @@ class _CreateBudgetScreenState extends State<CreateBudgetScreen>
                                           horizontal: 12, vertical: 10),
                                       decoration: BoxDecoration(
                                         color: const Color(0xFFB00020)
-                                            .withOpacity(0.12),
+                                            .withValues(alpha: 0.12),
                                         border: Border.all(
                                           color: const Color(0xFFB00020)
-                                              .withOpacity(0.35),
+                                              .withValues(alpha: 0.35),
                                           width: 1,
                                         ),
                                         borderRadius: BorderRadius.circular(14),

@@ -143,14 +143,14 @@ class _ProjectScreenState extends State<ProjectScreen>
                         Text(
                           'Tracks: ${_tracks.length}',
                           style: TextStyle(
-                            color: Colors.white.withOpacity(0.7),
+                            color: Colors.white.withValues(alpha: 0.7),
                             fontSize: 14,
                           ),
                         ),
                         Text(
                           'Status: Work in Progress',
                           style: TextStyle(
-                            color: Colors.white.withOpacity(0.7),
+                            color: Colors.white.withValues(alpha: 0.7),
                             fontSize: 14,
                           ),
                         ),
@@ -245,7 +245,7 @@ class _AddPill extends StatelessWidget {
               const Spacer(),
               Icon(
                 Icons.add_circle_rounded,
-                color: _ProjectScreenState.kAccent.withOpacity(0.9),
+                color: _ProjectScreenState.kAccent.withValues(alpha: 0.9),
               ),
             ],
           ),
@@ -317,7 +317,7 @@ class _TrackPill extends StatelessWidget {
               FilledButton(
                 onPressed: onOpenEditor,
                 style: FilledButton.styleFrom(
-                  backgroundColor: _ProjectScreenState.kAccent.withOpacity(
+                  backgroundColor: _ProjectScreenState.kAccent.withValues(alpha: 
                     0.16,
                   ),
                   padding: const EdgeInsets.symmetric(

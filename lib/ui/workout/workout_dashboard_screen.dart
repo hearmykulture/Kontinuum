@@ -1617,7 +1617,7 @@ class _WorkoutDashboardScreenState extends State<WorkoutDashboardScreen> {
                 Text(
                   'Your plan has you off the floor today so you can recover and come back stronger.',
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.78),
+                    color: Colors.white.withValues(alpha: 0.78),
                     fontSize: 13,
                   ),
                 ),

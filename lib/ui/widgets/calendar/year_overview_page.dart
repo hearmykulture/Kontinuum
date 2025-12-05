@@ -381,7 +381,7 @@ class _MonthMiniState extends State<_MonthMini> {
                     }
                     if (isSel) {
                       deco = BoxDecoration(
-                        color: widget.accent.withOpacity(0.90),
+                        color: widget.accent.withValues(alpha: 0.90),
                         shape: BoxShape.circle,
                       );
                     }

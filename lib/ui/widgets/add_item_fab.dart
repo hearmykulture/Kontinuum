@@ -36,7 +36,7 @@ class AddItemFab extends StatelessWidget {
       context: context,
       barrierDismissible: true,
       barrierLabel: 'dismiss',
-      barrierColor: Colors.black.withOpacity(0.55),
+      barrierColor: Colors.black.withValues(alpha: 0.55),
       transitionDuration: const Duration(milliseconds: 180),
       pageBuilder: (_, __, ___) => Center(
         child: Material(
@@ -779,7 +779,7 @@ class _NewObjectiveCardState extends State<_NewObjectiveCard> {
                     children: [
                       for (int i = 1; i <= 7; i++)
                         ChoiceChip(
-                          selectedColor: accent.withOpacity(0.22),
+                          selectedColor: accent.withValues(alpha: 0.22),
                           labelStyle: const TextStyle(color: Colors.white),
                           selected: _weekday[i] == true,
                           label: Text(_weekdayLabel(i)),
@@ -980,7 +980,7 @@ class _NewObjectiveCardState extends State<_NewObjectiveCard> {
       context: context,
       barrierDismissible: true,
       barrierLabel: 'dismiss',
-      barrierColor: Colors.black.withOpacity(0.55),
+      barrierColor: Colors.black.withValues(alpha: 0.55),
       transitionDuration: const Duration(milliseconds: 160),
       pageBuilder: (_, __, ___) => Center(
         child: Material(

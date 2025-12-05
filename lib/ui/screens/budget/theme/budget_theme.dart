@@ -10,5 +10,5 @@ class BudgetTheme {
   static const Color accent = Color(0xFF8EB69B);
   static const Color unallocatedGray = Color(0xFF9AA0A6);
 
-  static Color dividerOnCard(BuildContext _) => Colors.white.withOpacity(0.08);
+  static Color dividerOnCard(BuildContext _) => Colors.white.withValues(alpha: 0.08);
 }

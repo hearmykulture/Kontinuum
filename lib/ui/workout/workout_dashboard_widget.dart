@@ -1524,7 +1524,7 @@ class _WorkoutMiniCalendarSheetState extends State<_WorkoutMiniCalendarSheet> {
 
                                   final Color fg = inDisplayedMonth
                                       ? _text
-                                      : _muted.withOpacity(0.35);
+                                      : _muted.withValues(alpha: 0.35);
 
                                   BoxDecoration deco;
                                   if (isToday) {
@@ -1537,7 +1537,7 @@ class _WorkoutMiniCalendarSheetState extends State<_WorkoutMiniCalendarSheet> {
                                       ),
                                       boxShadow: [
                                         BoxShadow(
-                                          color: Colors.white.withOpacity(0.06),
+                                          color: Colors.white.withValues(alpha: 0.06),
                                           blurRadius: 12,
                                         ),
                                       ],

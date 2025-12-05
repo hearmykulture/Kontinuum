@@ -43,7 +43,7 @@ class _AmountPickerCardState extends State<AmountPickerCard> {
       decoration: BoxDecoration(
         color: BudgetTheme.bg,
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: Colors.white.withOpacity(0.12), width: 1),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12), width: 1),
       ),
       padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
       child: Column(
@@ -53,7 +53,7 @@ class _AmountPickerCardState extends State<AmountPickerCard> {
             width: 36,
             height: 4,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.25),
+              color: Colors.white.withValues(alpha: 0.25),
               borderRadius: BorderRadius.circular(2),
             ),
           ),
@@ -84,10 +84,10 @@ class _AmountPickerCardState extends State<AmountPickerCard> {
           SliderTheme(
             data: SliderTheme.of(context).copyWith(
               activeTrackColor: BudgetTheme.accent,
-              inactiveTrackColor: BudgetTheme.accent.withOpacity(0.25),
+              inactiveTrackColor: BudgetTheme.accent.withValues(alpha: 0.25),
               trackHeight: 6,
               thumbColor: BudgetTheme.accent,
-              overlayColor: BudgetTheme.accent.withOpacity(0.18),
+              overlayColor: BudgetTheme.accent.withValues(alpha: 0.18),
               thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 12),
               trackShape: const RoundedRectSliderTrackShape(),
             ),
@@ -152,7 +152,7 @@ class _Stat extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.08),
+        color: Colors.white.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(18),
       ),
       child: Row(

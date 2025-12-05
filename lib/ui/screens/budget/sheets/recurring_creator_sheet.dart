@@ -85,7 +85,7 @@ class _RecurringCreatorSheetState extends State<RecurringCreatorSheet> {
       HapticFeedback.heavyImpact();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          backgroundColor: Colors.black.withOpacity(0.9),
+          backgroundColor: Colors.black.withValues(alpha: 0.9),
           content: const Text(
             'Please choose a category for this expense.',
             style: TextStyle(color: Colors.white),
@@ -130,7 +130,7 @@ class _RecurringCreatorSheetState extends State<RecurringCreatorSheet> {
                   width: 36,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.25),
+                    color: Colors.white.withValues(alpha: 0.25),
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -212,7 +212,7 @@ class _RecurringCreatorSheetState extends State<RecurringCreatorSheet> {
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 10, vertical: 8),
                             decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(
+                              color: Colors.white.withValues(alpha: 
                                   _selectedCategory?.name == c.name
                                       ? 0.18
                                       : 0.08),
@@ -220,7 +220,7 @@ class _RecurringCreatorSheetState extends State<RecurringCreatorSheet> {
                               border: Border.all(
                                 color: _selectedCategory?.name == c.name
                                     ? c.color
-                                    : Colors.white.withOpacity(0.12),
+                                    : Colors.white.withValues(alpha: 0.12),
                                 width: 1,
                               ),
                             ),
@@ -267,12 +267,12 @@ class _RecurringCreatorSheetState extends State<RecurringCreatorSheet> {
                         width: 52,
                         height: 52,
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(sel ? 0.12 : 0.06),
+                          color: Colors.white.withValues(alpha: sel ? 0.12 : 0.06),
                           borderRadius: BorderRadius.circular(14),
                           border: Border.all(
                             color: sel
                                 ? BudgetTheme.mint
-                                : Colors.white.withOpacity(0.12),
+                                : Colors.white.withValues(alpha: 0.12),
                             width: 1,
                           ),
                         ),
@@ -352,10 +352,10 @@ class _RecurringCreatorSheetState extends State<RecurringCreatorSheet> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(selected ? 0.18 : 0.08),
+          color: Colors.white.withValues(alpha: selected ? 0.18 : 0.08),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: selected ? BudgetTheme.mint : Colors.white.withOpacity(0.12),
+            color: selected ? BudgetTheme.mint : Colors.white.withValues(alpha: 0.12),
             width: 1,
           ),
         ),
@@ -379,14 +379,14 @@ class _RecurringCreatorSheetState extends State<RecurringCreatorSheet> {
         fontWeight: FontWeight.w600,
       ),
       filled: true,
-      fillColor: Colors.white.withOpacity(0.06),
+      fillColor: Colors.white.withValues(alpha: 0.06),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
-        borderSide: BorderSide(color: Colors.white.withOpacity(0.12)),
+        borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
-        borderSide: BorderSide(color: Colors.white.withOpacity(0.12)),
+        borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
@@ -403,7 +403,7 @@ class _RecurringCreatorSheetState extends State<RecurringCreatorSheet> {
           child: Text(
             s,
             style: TextStyle(
-              color: Colors.white.withOpacity(0.75),
+              color: Colors.white.withValues(alpha: 0.75),
               fontWeight: FontWeight.w700,
             ),
           ),

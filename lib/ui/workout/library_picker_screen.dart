@@ -119,15 +119,15 @@ class _LibraryPickerScreenState extends State<LibraryPickerScreen> {
                 hintText: 'Search exercises...',
                 hintStyle: const TextStyle(color: Colors.white38),
                 filled: true,
-                fillColor: Colors.white.withOpacity(.035),
+                fillColor: Colors.white.withValues(alpha: .035),
                 enabledBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide(color: Colors.white.withOpacity(.05)),
+                  borderSide: BorderSide(color: Colors.white.withValues(alpha: .05)),
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(14),
                   borderSide:
-                      BorderSide(color: AppColors.accentBlue.withOpacity(.4)),
+                      BorderSide(color: AppColors.accentBlue.withValues(alpha: .4)),
                 ),
               ),
             ),
@@ -387,12 +387,12 @@ class _TabChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bg = selected
-        ? AppColors.accentBlue.withOpacity(.16)
-        : Colors.white.withOpacity(.02);
+        ? AppColors.accentBlue.withValues(alpha: .16)
+        : Colors.white.withValues(alpha: .02);
     final border = selected
-        ? AppColors.accentBlue.withOpacity(.6)
-        : Colors.white.withOpacity(.06);
-    final txt = selected ? Colors.white : Colors.white.withOpacity(.75);
+        ? AppColors.accentBlue.withValues(alpha: .6)
+        : Colors.white.withValues(alpha: .06);
+    final txt = selected ? Colors.white : Colors.white.withValues(alpha: .75);
 
     return InkWell(
       onTap: onTap,
@@ -431,11 +431,11 @@ class _FilterChipPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bg = selected
-        ? Colors.white.withOpacity(.08)
-        : Colors.white.withOpacity(.02);
+        ? Colors.white.withValues(alpha: .08)
+        : Colors.white.withValues(alpha: .02);
     final border = selected
-        ? AppColors.accentBlue.withOpacity(.5)
-        : Colors.white.withOpacity(.04);
+        ? AppColors.accentBlue.withValues(alpha: .5)
+        : Colors.white.withValues(alpha: .04);
 
     return InkWell(
       onTap: onTap,
@@ -450,7 +450,7 @@ class _FilterChipPill extends StatelessWidget {
         child: Text(
           label,
           style: TextStyle(
-            color: Colors.white.withOpacity(.85),
+            color: Colors.white.withValues(alpha: .85),
             fontSize: 12.5,
           ),
         ),
@@ -480,9 +480,9 @@ class _ExerciseTile extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(.015),
+        color: Colors.white.withValues(alpha: .015),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withOpacity(.04)),
+        border: Border.all(color: Colors.white.withValues(alpha: .04)),
       ),
       child: ListTile(
         onTap: onSelect,
@@ -502,7 +502,7 @@ class _ExerciseTile extends StatelessWidget {
               Text(
                 muscles,
                 style: TextStyle(
-                  color: Colors.white.withOpacity(.55),
+                  color: Colors.white.withValues(alpha: .55),
                   fontSize: 12,
                 ),
               ),
@@ -510,7 +510,7 @@ class _ExerciseTile extends StatelessWidget {
               Text(
                 eq,
                 style: TextStyle(
-                  color: Colors.white.withOpacity(.35),
+                  color: Colors.white.withValues(alpha: .35),
                   fontSize: 11.5,
                 ),
               ),
@@ -521,13 +521,13 @@ class _ExerciseTile extends StatelessWidget {
           children: [
             IconButton(
               icon: const Icon(Icons.favorite, size: 20),
-              color: Colors.white.withOpacity(.6),
+              color: Colors.white.withValues(alpha: .6),
               onPressed: onFavorite,
               tooltip: 'Favorite',
             ),
             IconButton(
               icon: const Icon(Icons.auto_awesome, size: 20),
-              color: Colors.white.withOpacity(.6),
+              color: Colors.white.withValues(alpha: .6),
               onPressed: onSimilar,
               tooltip: 'View similar',
             ),
@@ -562,7 +562,7 @@ class _BottomSheetPicker extends StatelessWidget {
             width: 40,
             height: 4,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(.12),
+              color: Colors.white.withValues(alpha: .12),
               borderRadius: BorderRadius.circular(999),
             ),
           ),
@@ -581,7 +581,7 @@ class _BottomSheetPicker extends StatelessWidget {
               title: Text(
                 opt,
                 style: TextStyle(
-                  color: Colors.white.withOpacity(.9),
+                  color: Colors.white.withValues(alpha: .9),
                 ),
               ),
               trailing: selected == opt
@@ -594,7 +594,7 @@ class _BottomSheetPicker extends StatelessWidget {
           ListTile(
             title: Text(
               'Clear',
-              style: TextStyle(color: Colors.white.withOpacity(.5)),
+              style: TextStyle(color: Colors.white.withValues(alpha: .5)),
             ),
             onTap: () => Navigator.of(context).pop(null),
           ),
@@ -630,7 +630,7 @@ class _BottomSheetEnumPicker<T> extends StatelessWidget {
             width: 40,
             height: 4,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(.12),
+              color: Colors.white.withValues(alpha: .12),
               borderRadius: BorderRadius.circular(999),
             ),
           ),
@@ -649,7 +649,7 @@ class _BottomSheetEnumPicker<T> extends StatelessWidget {
               title: Text(
                 labelBuilder(v),
                 style: TextStyle(
-                  color: Colors.white.withOpacity(.9),
+                  color: Colors.white.withValues(alpha: .9),
                 ),
               ),
               trailing: selected == v
@@ -662,7 +662,7 @@ class _BottomSheetEnumPicker<T> extends StatelessWidget {
           ListTile(
             title: Text(
               'Clear',
-              style: TextStyle(color: Colors.white.withOpacity(.5)),
+              style: TextStyle(color: Colors.white.withValues(alpha: .5)),
             ),
             onTap: () => Navigator.of(context).pop<T?>(null),
           ),

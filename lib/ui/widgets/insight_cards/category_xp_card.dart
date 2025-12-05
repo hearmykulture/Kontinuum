@@ -83,7 +83,7 @@ class CategoryXpCard extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w500,
-                    color: color.withOpacity(0.9),
+                    color: color.withValues(alpha: 0.9),
                   ),
                 ),
                 if (timeframe != 'All Time' && categoryXpDelta > 0)

@@ -636,7 +636,7 @@ class _TimePill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final timeColor = timeDisabled
-        ? Colors.white.withOpacity(0.55)
+        ? Colors.white.withValues(alpha: 0.55)
         : Colors.white;
 
     return Container(
@@ -815,7 +815,7 @@ class _SegButton extends StatelessWidget {
           child: Text(
             label,
             style: TextStyle(
-              color: Colors.white.withOpacity(selected ? 1.0 : 0.8),
+              color: Colors.white.withValues(alpha: selected ? 1.0 : 0.8),
               fontWeight: FontWeight.w700,
               fontSize: 12,
               letterSpacing: 0.8,

@@ -16,7 +16,7 @@ class MilestoneNode extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final bgColor = achieved
-        ? Colors.greenAccent.shade700.withOpacity(0.9)
+        ? Colors.greenAccent.shade700.withValues(alpha: 0.9)
         : Colors.grey.shade800;
     final borderColor = achieved
         ? Colors.greenAccent.shade400
@@ -33,7 +33,7 @@ class MilestoneNode extends StatelessWidget {
           boxShadow: [
             if (achieved)
               BoxShadow(
-                color: Colors.greenAccent.withOpacity(0.5),
+                color: Colors.greenAccent.withValues(alpha: 0.5),
                 blurRadius: 12,
                 spreadRadius: 1,
               ),
