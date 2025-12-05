@@ -1,4 +1,5 @@
 import 'package:kontinuum/models/budget_transaction.dart';
+import 'package:kontinuum/models/manual_transaction_draft.dart';
 import 'package:kontinuum/services/budget_boxes.dart';
 import 'package:kontinuum/services/category_map.dart';
 
@@ -91,5 +92,42 @@ class TransactionsStore {
         return bd.compareTo(ad);
       });
     return list;
+  }
+
+  /// Add a manual transaction created by the user locally
+  static Future<BudgetTransaction> addManualTransaction(
+    ManualTransactionDraft draft,
+  ) async {
+    final box = BudgetBoxes.tx;
+
+    // Generate a unique ID for this manual transaction
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final id = 'manual_${timestamp}_${(0 + 1).toString().padLeft(5, '0')}';
+
+    // Determine isExpense based on flow
+    final isExpense = draft.isExpense;
+
+    // Create the BudgetTransaction
+    final transaction = BudgetTransaction(
+      id: id,
+      accountId: draft.accountId ?? 'manual',
+      date: draft.date,
+      amountCents: draft.amountCents.abs(),
+      isExpense: isExpense,
+      status: 'posted',
+      category: draft.category,
+      merchant: draft.title,
+      memo: draft.description,
+      currency: draft.currency,
+      reviewed: true,
+      manual: true,
+      flow: draft.normalizedFlow,
+      accountType: draft.accountType ?? 'manual',
+      accountName: draft.accountName,
+    );
+
+    // Add to the box and return
+    await box.add(transaction);
+    return transaction;
   }
 }

@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
-import 'package:hive_flutter/hive_flutter.dart';
 import 'package:kontinuum/models/budget_transaction.dart';
 import 'package:kontinuum/models/manual_transaction_draft.dart';
 import 'package:kontinuum/services/budget_boxes.dart';
@@ -11,7 +10,7 @@ class TransactionsProvider extends ChangeNotifier {
   bool _loading = false;
   bool get loading => _loading;
 
-  late final StreamSubscription _sub;
+  late final StreamSubscription<void> _sub;
 
   TransactionsProvider() {
     // Re-emit when the tx box changes so UI auto-updates.
