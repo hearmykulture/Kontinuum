@@ -3,34 +3,47 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import 'package:kontinuum/models/mission.dart';
+// Aliased to avoid ambiguous imports if the editor defines similarly named symbols.
+import 'package:kontinuum/models/mission.dart' as model;
 import 'package:kontinuum/providers/mission_provider.dart';
 import 'package:kontinuum/providers/objective_provider.dart';
 import 'package:kontinuum/ui/widgets/mission_card.dart';
 import 'package:kontinuum/ui/widgets/level_up_watcher.dart';
-import 'package:kontinuum/data/stat_repository.dart';
 
 // For the Home button fallback when this screen isn't on its own route.
 import 'package:kontinuum/ui/screens/progress_screen.dart';
 
-/// Helper compatible with older Dart: classic switch, no switch-expr.
-Color _rarityColor(MissionRarity r) {
+// Full-screen mission editor
+import 'package:kontinuum/ui/screens/missions/mission_editor_page.dart'
+    as editor;
+import 'package:kontinuum/core/time/app_clock.dart';
+
+/// Classic switch helper for rarity → color.
+Color _rarityColor(model.MissionRarity r) {
   switch (r) {
-    case MissionRarity.common:
+    case model.MissionRarity.common:
       return Colors.grey;
-    case MissionRarity.rare:
+    case model.MissionRarity.rare:
       return Colors.cyanAccent;
-    case MissionRarity.legendary:
+    case model.MissionRarity.legendary:
       return Colors.deepPurpleAccent;
   }
 }
 
+// Keep mission surfaces aligned with the Progress screen palette.
+const Color _missionBg = kProgressBg;
+
 class MissionBoardScreen extends StatefulWidget {
-  const MissionBoardScreen({super.key, this.isActive = true});
+  const MissionBoardScreen({
+    super.key,
+    this.isActive = true,
+    this.skipIntroAnimation = false,
+  });
 
   /// When embedded inside a PageView, pass `isActive: pageIndex == boardIndex`
   /// so the 1s timer is paused off-screen to avoid jank.
   final bool isActive;
+  final bool skipIntroAnimation;
 
   @override
   State<MissionBoardScreen> createState() => _MissionBoardScreenState();
@@ -46,10 +59,9 @@ class _MissionBoardScreenState extends State<MissionBoardScreen>
   Duration _timeUntilMidnight = Duration.zero;
   bool _didResetThisMidnight = false;
 
-  // Intro fade + scale (no slide)
+  // Intro fade (no slide)
   late final AnimationController _introCtrl;
   late final Animation<double> _fade;
-  late final Animation<double> _scale;
 
   @override
   void initState() {
@@ -59,11 +71,9 @@ class _MissionBoardScreenState extends State<MissionBoardScreen>
     _introCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1100),
+      value: widget.skipIntroAnimation ? 1.0 : 0.0,
     );
     _fade = CurvedAnimation(parent: _introCtrl, curve: Curves.easeOutCubic);
-    _scale = Tween<double>(begin: 0.98, end: 1.0).animate(
-      CurvedAnimation(parent: _introCtrl, curve: Curves.easeOutCubic),
-    );
 
     // Warm the provider logic.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -78,9 +88,11 @@ class _MissionBoardScreenState extends State<MissionBoardScreen>
       missionProvider.ensureMissionSlotsFilled();
 
       // Slight delay so we definitely start "empty" before fading in.
-      Future.delayed(const Duration(milliseconds: 120), () {
-        if (mounted) _introCtrl.forward();
-      });
+      if (!widget.skipIntroAnimation) {
+        Future.delayed(const Duration(milliseconds: 120), () {
+          if (mounted) _introCtrl.forward();
+        });
+      }
 
       // Start/stop ticking based on visibility.
       _ensureTimer(widget.isActive, initialKick: true);
@@ -136,10 +148,15 @@ class _MissionBoardScreenState extends State<MissionBoardScreen>
   }
 
   void _updateTimeUntilMidnight() {
-    // CST (UTC-5) approximation
-    final now = DateTime.now().toUtc().subtract(const Duration(hours: 5));
-    final nextMidnight = DateTime(now.year, now.month, now.day + 1);
-    _timeUntilMidnight = nextMidnight.difference(now);
+    // CST (UTC-5) approximation (keep all math in UTC to avoid tz skew).
+    final utcNow = AppClock.now().toUtc();
+    final cstNow = utcNow.subtract(const Duration(hours: 5));
+    final cstNextMidnight = DateTime.utc(
+      cstNow.year,
+      cstNow.month,
+      cstNow.day,
+    ).add(const Duration(days: 1));
+    _timeUntilMidnight = cstNextMidnight.difference(cstNow);
   }
 
   String _formatDuration(Duration d) {
@@ -149,14 +166,23 @@ class _MissionBoardScreenState extends State<MissionBoardScreen>
     return "$h:$m:$s";
   }
 
-  // Open Mission Bank with NO transition.
-  void _openBank({int initialTab = 0}) {
+  // Open Mission Bank with a quick crossfade.
+  void _openBank() {
     Navigator.of(context).push(
       PageRouteBuilder<void>(
-        pageBuilder: (_, __, ___) => MissionBankScreen(initialTab: initialTab),
-        transitionDuration: Duration.zero,
-        reverseTransitionDuration: Duration.zero,
-        transitionsBuilder: (_, __, ___, child) => child,
+        opaque: false,
+        barrierColor: Colors.transparent,
+        pageBuilder: (_, __, ___) => const MissionBankScreen(),
+        transitionDuration: const Duration(milliseconds: 220),
+        reverseTransitionDuration: const Duration(milliseconds: 220),
+        transitionsBuilder: (_, anim, __, child) {
+          final curved = CurvedAnimation(
+            parent: anim,
+            curve: Curves.easeOutCubic,
+            reverseCurve: Curves.easeInCubic,
+          );
+          return FadeTransition(opacity: curved, child: child);
+        },
       ),
     );
   }
@@ -176,53 +202,64 @@ class _MissionBoardScreenState extends State<MissionBoardScreen>
 
   @override
   Widget build(BuildContext context) {
-    // We fade/scale in the whole Scaffold and ignore input until done.
+    // We fade in the whole Scaffold and ignore input until done.
     return Stack(
       children: [
-        Container(color: Colors.black), // stays black during 0-opacity
+        Container(color: _missionBg), // stays aligned during 0-opacity
         AnimatedBuilder(
           animation: _introCtrl,
           builder: (_, __) {
-            final absorbing = _introCtrl.value < 0.999;
+            final absorbing =
+                !widget.skipIntroAnimation && _introCtrl.value < 0.999;
             return AbsorbPointer(
               absorbing: absorbing,
               child: FadeTransition(
                 opacity: _fade,
-                child: ScaleTransition(
-                  scale: _scale,
-                  child: LevelUpWatcher(
-                    child: Scaffold(
-                      backgroundColor: Colors.black, // board background
-                      appBar: AppBar(
-                        backgroundColor: Colors.black,
-                        centerTitle: true,
+                child: LevelUpWatcher(
+                  child: Scaffold(
+                    backgroundColor: _missionBg, // board background
+                    appBar: AppBar(
+                      backgroundColor: _missionBg,
+                      centerTitle: true,
+                      toolbarHeight: 46,
 
-                        // ⬅️ Mission Bank (leading) — opens instantly (no animation)
-                        leading: _BankButton(
-                          onTap: () => _openBank(initialTab: 0),
+                      // ⬅️ Mission Bank (leading) — opens instantly (no animation)
+                      leading: Transform.translate(
+                        offset: const Offset(0, -10),
+                        child: _BankButton(
+                          onTap: _openBank,
                         ),
+                      ),
 
-                        // 🧭 Title — only this tiny part rebuilds every second
-                        title:
-                            _HeaderTitle(countdownListenable: _countdownText),
+                      // 🧭 Title — only this tiny part rebuilds every second
+                      title: _HeaderTitle(countdownListenable: _countdownText),
 
-                        // ➡️ Home (actions)
-                        actions: [
-                          IconButton(
-                            tooltip: 'Back to Main',
-                            icon: const Icon(Icons.home_outlined,
-                                color: Colors.white70),
-                            onPressed: _goHome,
+                      // ➡️ Home (actions)
+                      actions: [
+                        Padding(
+                          padding: const EdgeInsets.only(right: 4),
+                          child: Transform.translate(
+                            offset: const Offset(0, -10),
+                            child: IconButton(
+                              tooltip: 'Close',
+                              iconSize: 20,
+                              style: IconButton.styleFrom(
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.all(8),
+                              ),
+                              icon: const Icon(Icons.close),
+                              onPressed: _goHome,
+                            ),
                           ),
-                        ],
-                      ),
-                      body: const SafeArea(
-                        top: false,
-                        left: false,
-                        right: false,
-                        bottom: true,
-                        child: _BoardPage(),
-                      ),
+                        ),
+                      ],
+                    ),
+                    body: const SafeArea(
+                      top: false,
+                      left: false,
+                      right: false,
+                      bottom: true,
+                      child: _BoardPage(),
                     ),
                   ),
                 ),
@@ -241,26 +278,30 @@ class _BankButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const bankBg = Color(0xFF0F0F1A); // Destination background styling
     return Padding(
       padding: const EdgeInsets.only(left: 4),
       child: Material(
-        color: bankBg,
+        color: _missionBg,
         shape: const CircleBorder(),
         child: InkWell(
           customBorder: const CircleBorder(),
           onTap: onTap,
-          child: const SizedBox(
-            width: 40,
-            height: 40,
-            // crate/locker icon reads as "bank/storage"
-            child: Icon(Icons.inventory_2_outlined, color: Colors.white70),
+          child: const Padding(
+            padding: EdgeInsets.all(6),
+            child: Icon(Icons.inventory_2_outlined,
+                color: Colors.white, size: 20),
           ),
         ),
       ),
     );
   }
 }
+
+const TextStyle _missionTitleTextStyle = TextStyle(
+  fontSize: 16,
+  fontWeight: FontWeight.w500,
+  color: Colors.white,
+);
 
 class _HeaderTitle extends StatelessWidget {
   const _HeaderTitle({required this.countdownListenable});
@@ -279,25 +320,20 @@ class _HeaderTitle extends StatelessWidget {
             const Text(
               "Mission Board",
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                fontSize: 20,
-                color: Colors.white,
-                letterSpacing: 0.2,
-              ),
+              style: _missionTitleTextStyle,
             ),
             const SizedBox(height: 2),
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.schedule, size: 15, color: Colors.white60),
+                const Icon(Icons.schedule, size: 13, color: Colors.white60),
                 const SizedBox(width: 6),
                 Text(
                   "Resets in $countdown",
                   style: const TextStyle(
                     color: Colors.white60,
-                    fontSize: 12,
-                    letterSpacing: 0.2,
+                    fontSize: 11,
+                    letterSpacing: 0.15,
                   ),
                 ),
               ],
@@ -400,56 +436,57 @@ class _BoardPage extends StatelessWidget {
 // =====================================================================
 
 class MissionBankScreen extends StatelessWidget {
-  const MissionBankScreen({super.key, this.initialTab = 0});
-
-  /// 0 = All, 1 = Completed
-  final int initialTab;
+  const MissionBankScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 2,
-      initialIndex: initialTab,
-      child: Scaffold(
-        backgroundColor: const Color(0xFF0F0F1A),
-        appBar: AppBar(
-          backgroundColor: Colors.black,
-          title: const Text(
-            'Mission Bank',
-            style: TextStyle(fontWeight: FontWeight.w700),
-          ),
-          bottom: const TabBar(
-            indicatorColor: Color(0xFF6C63FF),
-            tabs: [
-              Tab(text: 'All'),
-              Tab(text: 'Completed'),
-            ],
-          ),
-          actions: [
-            IconButton(
-              tooltip: 'Add mission',
-              icon: const Icon(Icons.add),
-              onPressed: () async {
-                final created = await showDialog<Mission>(
-                  context: context,
-                  builder: (_) => const _NewMissionDialog(),
-                );
-                if (!context.mounted) return;
-                if (created != null) {
-                  context.read<MissionProvider>().addMission(created);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Mission added')),
-                  );
-                }
-              },
+    return Scaffold(
+      backgroundColor: _missionBg,
+      appBar: AppBar(
+        backgroundColor: _missionBg,
+        centerTitle: true,
+        toolbarHeight: 46,
+        iconTheme: const IconThemeData(color: Colors.white, size: 20),
+        leading: Transform.translate(
+          offset: const Offset(0, -10),
+          child: IconButton(
+            iconSize: 20,
+            style: IconButton.styleFrom(
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.all(8),
             ),
-          ],
+            tooltip: 'Back',
+            icon: const Icon(Icons.arrow_back_ios_new_rounded),
+            onPressed: () => Navigator.of(context).maybePop(),
+          ),
         ),
-        // ⛔️ Removed Hero target/Stack; straight content.
-        body: const TabBarView(
-          children: [_AllMissionsTab(), _CompletedMissionsTab()],
+        title: Transform.translate(
+          offset: const Offset(0, -10),
+          child: const Text(
+            'Mission Bank',
+            style: _missionTitleTextStyle,
+          ),
         ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: Transform.translate(
+              offset: const Offset(0, -10),
+              child: IconButton(
+                iconSize: 20,
+                style: IconButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.all(8),
+                ),
+                tooltip: 'Close',
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ),
+          ),
+        ],
       ),
+      body: const _AllMissionsTab(),
     );
   }
 }
@@ -464,74 +501,221 @@ class _AllMissionsTab extends StatelessWidget {
     return Consumer<MissionProvider>(
       builder: (ctx, provider, _) {
         final items = provider.allMissionsSorted;
-        if (items.isEmpty) {
-          return const Center(
-            child: Text(
-              'No missions in the bank yet.',
-              style: TextStyle(color: Colors.white60),
-            ),
-          );
-        }
+        final activeMissions =
+            items.where((m) => !m.isCompleted).toList(growable: false);
+        final completedMissions =
+            items.where((m) => m.isCompleted).toList(growable: false);
+        final orderedMissions = [...activeMissions, ...completedMissions];
 
-        return ListView.separated(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-          itemCount: items.length,
-          separatorBuilder: (_, __) =>
-              const Divider(height: 1, color: Colors.white10),
-          itemBuilder: (_, i) {
-            final m = items[i];
+        final hasMissions = orderedMissions.isNotEmpty;
+        final totalItems = hasMissions ? orderedMissions.length + 1 : 2;
+
+        return ListView.builder(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+          itemCount: totalItems,
+          itemBuilder: (_, index) {
+            if (index == 0) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      await provider.debugResetBoardNow();
+                      if (!ctx.mounted) return;
+                      ScaffoldMessenger.of(ctx).showSnackBar(
+                        const SnackBar(
+                          content: Text('Debug: Simulated midnight reset'),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Debug: Reset Board (Midnight)'),
+                    style: OutlinedButton.styleFrom(
+                      alignment: Alignment.centerLeft,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      foregroundColor: const Color(0xFF6C63FF),
+                      side: BorderSide(
+                        color: const Color(0xFF6C63FF).withOpacity(0.6),
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }
+
+            if (!hasMissions && index == 1) {
+              return const Padding(
+                padding: EdgeInsets.only(top: 48),
+                child: Center(
+                  child: Text(
+                    'No missions in the bank yet.',
+                    style: TextStyle(color: Colors.white60),
+                  ),
+                ),
+              );
+            }
+
+            final m = orderedMissions[index - 1];
+            final isCompleted = m.isCompleted;
             final color = _rarityColor(m.rarity);
-            return ListTile(
-              contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-              title: Text(
-                m.title,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w600,
+            final cardColor =
+                isCompleted ? const Color(0xFF0D2218) : const Color(0xFF2D2B5F);
+            final titleColor = isCompleted ? Colors.white70 : Colors.white;
+            final rarityColor =
+                isCompleted ? color.withOpacity(0.55) : color;
+            final xpColor = isCompleted
+                ? Colors.cyanAccent.withOpacity(0.55)
+                : Colors.cyanAccent;
+            final metaColor =
+                isCompleted ? Colors.white54 : Colors.white70;
+            final acceptedColor = isCompleted
+                ? Colors.amberAccent.withOpacity(0.55)
+                : Colors.amberAccent;
+
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Dismissible(
+                key: ValueKey('mission_${m.id}'),
+                direction: DismissDirection.endToStart,
+                background: Container(
+                  alignment: Alignment.centerLeft,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE53935).withOpacity(0.9),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: const Icon(Icons.delete_outline, color: Colors.white),
                 ),
-              ),
-              subtitle: Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    _chip(
-                      m.rarity.name.toUpperCase(),
-                      border: color,
-                      text: color,
-                    ),
-                    _chip(
-                      '${m.xpReward} XP',
-                      border: Colors.cyanAccent,
-                      text: Colors.cyanAccent,
-                    ),
-                    if (m.categoryIds.isNotEmpty)
-                      _chip(
-                        m.categoryIds.first.toUpperCase(),
-                        border: Colors.white24,
-                        text: Colors.white70,
-                      ),
-                    if (m.isCompleted)
-                      _chip(
-                        'COMPLETED',
-                        border: Colors.greenAccent,
-                        text: Colors.greenAccent,
-                      ),
-                    if (m.isAccepted)
-                      _chip(
-                        'ACCEPTED',
-                        border: Colors.amberAccent,
-                        text: Colors.amberAccent,
-                      ),
-                  ],
+                secondaryBackground: Container(
+                  alignment: Alignment.centerRight,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE53935).withOpacity(0.9),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: const Icon(Icons.delete_outline, color: Colors.white),
                 ),
-              ),
-              // ⛔️ No "Put on board" — keep only Delete
-              trailing: IconButton(
-                tooltip: 'Delete',
-                icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
-                onPressed: () => provider.deleteMission(m.id),
+                confirmDismiss: (_) async {
+                  final confirmed = await showDialog<bool>(
+                        context: ctx,
+                        builder: (dialogCtx) {
+                          return AlertDialog(
+                            backgroundColor: const Color(0xFF1B1B23),
+                            title: const Text(
+                              'Delete mission?',
+                              style: TextStyle(color: Colors.white),
+                            ),
+                            content: Text(
+                              'Delete "${m.title}" from the bank?',
+                              style: const TextStyle(color: Colors.white70),
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () =>
+                                    Navigator.of(dialogCtx).pop(false),
+                                child: const Text('Cancel'),
+                              ),
+                              FilledButton(
+                                onPressed: () =>
+                                    Navigator.of(dialogCtx).pop(true),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: Colors.redAccent,
+                                ),
+                                child: const Text('Delete'),
+                              ),
+                            ],
+                          );
+                        },
+                      ) ??
+                      false;
+
+                  if (!confirmed) return false;
+                  provider.deleteMission(m.id);
+                  if (ctx.mounted) {
+                    ScaffoldMessenger.of(ctx).showSnackBar(
+                      SnackBar(
+                        content: Text('Deleted "${m.title}"'),
+                      ),
+                    );
+                  }
+                  return true;
+                },
+                child: SizedBox(
+                  width: double.infinity,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: cardColor,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          m.title,
+                          style: TextStyle(
+                            color: titleColor,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 5,
+                          runSpacing: 4,
+                          children: [
+                            _chip(
+                              m.rarity.name.toUpperCase(),
+                              border: rarityColor,
+                              text: rarityColor,
+                            ),
+                            _chip(
+                              '${m.xpReward} XP',
+                              border: xpColor,
+                              text: xpColor,
+                            ),
+                            if (m.categoryIds.isNotEmpty)
+                              _chip(
+                                m.categoryIds.first.toUpperCase(),
+                                border: metaColor.withOpacity(0.3),
+                                text: metaColor,
+                              ),
+                            if (m.categoryIds.length > 1)
+                              _chip(
+                                '${m.categoryIds.length - 1} more',
+                                border: metaColor.withOpacity(0.3),
+                                text: metaColor,
+                              ),
+                            if (m.isCompleted)
+                              _chip(
+                                'COMPLETED',
+                                border: Colors.greenAccent.withOpacity(0.55),
+                                text: Colors.greenAccent.withOpacity(0.55),
+                              ),
+                            if (m.isAccepted)
+                              _chip(
+                                'ACCEPTED',
+                                border: acceptedColor,
+                                text: acceptedColor,
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               ),
             );
           },
@@ -558,396 +742,6 @@ class _AllMissionsTab extends StatelessWidget {
           letterSpacing: 0.2,
         ),
       ),
-    );
-  }
-}
-
-// ------------------------- Completed missions -------------------------
-
-class _CompletedMissionsTab extends StatelessWidget {
-  const _CompletedMissionsTab();
-
-  @override
-  Widget build(BuildContext context) {
-    final provider = context.watch<MissionProvider>();
-    final completed = provider.completedMissions;
-
-    return Column(
-      children: [
-        // 🧪 Temporary debug control — performs EXACT midnight reset
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: OutlinedButton.icon(
-              onPressed: () async {
-                await provider
-                    .debugResetBoardNow(); // identical to midnight reset
-                if (!context.mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Debug: Simulated midnight reset'),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.refresh),
-              label: const Text('Debug: Reset Board (Midnight)'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: const Color(0xFF6C63FF),
-                side: BorderSide(
-                  // was withOpacity(0.6)
-                  color: const Color(0xFF6C63FF).withValues(alpha: 0.6),
-                ),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 4),
-        Expanded(
-          child: completed.isEmpty
-              ? const Center(
-                  child: Text(
-                    'Nothing completed yet.',
-                    style: TextStyle(color: Colors.white60),
-                  ),
-                )
-              : ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-                  itemCount: completed.length,
-                  separatorBuilder: (_, __) =>
-                      const Divider(height: 1, color: Colors.white10),
-                  itemBuilder: (_, i) {
-                    final m = completed[i];
-                    final color = _rarityColor(m.rarity);
-
-                    return ListTile(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                      title: Text(
-                        m.title,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      subtitle: Padding(
-                        padding: const EdgeInsets.only(top: 6),
-                        child: Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: [
-                            _chip(
-                              m.rarity.name.toUpperCase(),
-                              border: color,
-                              text: color,
-                            ),
-                            _chip(
-                              '${m.xpReward} XP',
-                              border: Colors.cyanAccent,
-                              text: Colors.cyanAccent,
-                            ),
-                            if (m.categoryIds.isNotEmpty)
-                              _chip(
-                                m.categoryIds.first.toUpperCase(),
-                                border: Colors.white24,
-                                text: Colors.white70,
-                              ),
-                          ],
-                        ),
-                      ),
-                      // ⛔️ No "Reopen" (can’t put back on board)
-                      trailing: IconButton(
-                        tooltip: 'Delete',
-                        icon: const Icon(
-                          Icons.delete_outline,
-                          color: Colors.redAccent,
-                        ),
-                        onPressed: () => provider.deleteMission(m.id),
-                      ),
-                    );
-                  },
-                ),
-        ),
-      ],
-    );
-  }
-
-  Widget _chip(String label, {required Color border, required Color text}) {
-    Color alpha(Color c, double o) => c.withAlpha((o * 255).round());
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: alpha(border, 0.6)),
-        color: alpha(border, 0.09),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: text,
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 0.2,
-        ),
-      ),
-    );
-  }
-}
-
-// ------------------------- New mission dialog -------------------------
-
-class _NewMissionDialog extends StatefulWidget {
-  const _NewMissionDialog();
-
-  @override
-  State<_NewMissionDialog> createState() => _NewMissionDialogState();
-}
-
-class _NewMissionDialogState extends State<_NewMissionDialog> {
-  final _titleCtrl = TextEditingController();
-  final _idCtrl = TextEditingController();
-  final _descCtrl = TextEditingController();
-  final _xpCtrl = TextEditingController(text: '100');
-
-  String? _categoryId;
-  String? _statId;
-  MissionRarity _rarity = MissionRarity.common;
-
-  @override
-  void dispose() {
-    _titleCtrl.dispose();
-    _idCtrl.dispose();
-    _descCtrl.dispose();
-    _xpCtrl.dispose();
-    super.dispose();
-  }
-
-  String _toIdSlug(String s) {
-    final x = s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_');
-    return x.replaceAll(RegExp(r'_+'), '_').replaceAll(RegExp(r'^_+|_+$'), '');
-  }
-
-  bool _validMeta(dynamic m) {
-    final id = (m.id ?? '').toString().trim();
-    final display = (m.display ?? '').toString().trim();
-    final cat = (m.categoryId ?? '').toString().trim();
-    return id.isNotEmpty && display.isNotEmpty && cat.isNotEmpty;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final objectiveProvider = context.read<ObjectiveProvider>();
-
-    final categories = objectiveProvider.categories.values.toList()
-      ..sort(
-        (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-      );
-
-    final statMetas = StatRepository.getAll().where(_validMeta).toList()
-      ..sort(
-        (a, b) => a.display.toString().compareTo(b.display.toString()),
-      );
-
-    final previewId =
-        (_idCtrl.text.isEmpty ? _toIdSlug(_titleCtrl.text) : _idCtrl.text);
-
-    return AlertDialog(
-      backgroundColor: const Color(0xFF1B1B23),
-      title: const Text('New Mission', style: TextStyle(color: Colors.white)),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _titleCtrl,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                labelText: 'Title',
-                labelStyle: TextStyle(color: Colors.white70),
-                hintText: 'Write 10 metaphors or punchlines',
-                hintStyle: TextStyle(color: Colors.white38),
-                border: OutlineInputBorder(borderSide: BorderSide.none),
-                filled: true,
-                fillColor: Color(0xFF0D1116),
-              ),
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _idCtrl,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                labelText: 'ID (optional)',
-                labelStyle: const TextStyle(color: Colors.white70),
-                hintText: previewId,
-                hintStyle: const TextStyle(color: Colors.white38),
-                border: const OutlineInputBorder(borderSide: BorderSide.none),
-                filled: true,
-                fillColor: const Color(0xFF0D1116),
-              ),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _descCtrl,
-              maxLines: 3,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                labelText: 'Description (optional)',
-                labelStyle: TextStyle(color: Colors.white70),
-                border: OutlineInputBorder(borderSide: BorderSide.none),
-                filled: true,
-                fillColor: Color(0xFF0D1116),
-              ),
-            ),
-            const SizedBox(height: 10),
-            DropdownButtonFormField<String>(
-              value: _categoryId,
-              dropdownColor: const Color(0xFF23232B),
-              style: const TextStyle(color: Colors.white),
-              items: categories
-                  .map(
-                    (c) => DropdownMenuItem(value: c.id, child: Text(c.name)),
-                  )
-                  .toList(),
-              onChanged: (v) => setState(() => _categoryId = v),
-              decoration: const InputDecoration(
-                labelText: 'Category',
-                labelStyle: TextStyle(color: Colors.white70),
-                border: OutlineInputBorder(borderSide: BorderSide.none),
-                filled: true,
-                fillColor: Color(0xFF0D1116),
-              ),
-            ),
-            const SizedBox(height: 10),
-            DropdownButtonFormField<String>(
-              value: _statId,
-              dropdownColor: const Color(0xFF23232B),
-              style: const TextStyle(color: Colors.white),
-              items: statMetas
-                  .map(
-                    (m) => DropdownMenuItem(
-                      value: m.id.toString(),
-                      child: Text(m.display.toString()),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (v) => setState(() => _statId = v),
-              decoration: const InputDecoration(
-                labelText: 'Stat',
-                labelStyle: TextStyle(color: Colors.white70),
-                border: OutlineInputBorder(borderSide: BorderSide.none),
-                filled: true,
-                fillColor: Color(0xFF0D1116),
-              ),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _xpCtrl,
-              keyboardType: TextInputType.number,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                labelText: 'XP Reward',
-                labelStyle: TextStyle(color: Colors.white70),
-                border: OutlineInputBorder(borderSide: BorderSide.none),
-                filled: true,
-                fillColor: Color(0xFF0D1116),
-              ),
-            ),
-            const SizedBox(height: 10),
-            DropdownButtonFormField<MissionRarity>(
-              value: _rarity,
-              dropdownColor: const Color(0xFF23232B),
-              style: const TextStyle(color: Colors.white),
-              items: MissionRarity.values
-                  .map(
-                    (r) => DropdownMenuItem(
-                      value: r,
-                      child: Text(
-                        r.name[0].toUpperCase() + r.name.substring(1),
-                      ),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (v) => setState(() => _rarity = v ?? _rarity),
-              decoration: const InputDecoration(
-                labelText: 'Rarity',
-                labelStyle: TextStyle(color: Colors.white70),
-                border: OutlineInputBorder(borderSide: BorderSide.none),
-                filled: true,
-                fillColor: Color(0xFF0D1116),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                'Final ID: ${previewId.isEmpty ? '—' : previewId}',
-                style: const TextStyle(color: Colors.white54, fontSize: 12),
-              ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () {
-            final missionProvider = context.read<MissionProvider>();
-
-            final title = _titleCtrl.text.trim();
-            final id = (_idCtrl.text.trim().isEmpty)
-                ? _toIdSlug(title)
-                : _idCtrl.text.trim();
-            final xp = int.tryParse(_xpCtrl.text.trim()) ?? 0;
-
-            if (title.isEmpty ||
-                id.isEmpty ||
-                xp <= 0 ||
-                _categoryId == null ||
-                _statId == null) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'Fill title, ID, category, stat and positive XP.',
-                  ),
-                ),
-              );
-              return;
-            }
-
-            // Prevent duplicate IDs
-            final exists = missionProvider.allMissionsSorted.any(
-              (m) => m.id.toLowerCase() == id.toLowerCase(),
-            );
-            if (exists) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('ID already exists. Pick another.'),
-                ),
-              );
-              return;
-            }
-
-            final mission = Mission(
-              id: id,
-              title: title,
-              description:
-                  _descCtrl.text.trim().isEmpty ? null : _descCtrl.text.trim(),
-              categoryIds: [_categoryId!],
-              statIds: [_statId!],
-              xpReward: xp,
-              rarity: _rarity,
-              isAccepted: false,
-              isCompleted: false,
-            );
-
-            Navigator.pop(context, mission);
-          },
-          child: const Text('Create'),
-        ),
-      ],
     );
   }
 }

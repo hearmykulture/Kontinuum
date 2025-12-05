@@ -29,13 +29,17 @@ class BudgetTransactionAdapter extends TypeAdapter<BudgetTransaction> {
       pendingTransactionId: fields[9] as String?,
       currency: fields[10] as String?,
       reviewed: fields[11] as bool,
+      manual: fields[12] as bool? ?? false,
+      flow: fields[13] as String?,
+      accountType: fields[14] as String?,
+      accountName: fields[15] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, BudgetTransaction obj) {
     writer
-      ..writeByte(12)
+      ..writeByte(16)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -59,7 +63,15 @@ class BudgetTransactionAdapter extends TypeAdapter<BudgetTransaction> {
       ..writeByte(10)
       ..write(obj.currency)
       ..writeByte(11)
-      ..write(obj.reviewed);
+      ..write(obj.reviewed)
+      ..writeByte(12)
+      ..write(obj.manual)
+      ..writeByte(13)
+      ..write(obj.flow)
+      ..writeByte(14)
+      ..write(obj.accountType)
+      ..writeByte(15)
+      ..write(obj.accountName);
   }
 
   @override

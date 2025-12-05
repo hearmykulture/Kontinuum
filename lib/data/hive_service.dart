@@ -1,4 +1,5 @@
 import 'package:hive/hive.dart';
+import 'package:kontinuum/models/budget_models_hive.dart';
 import 'package:kontinuum/models/category.dart';
 import 'package:kontinuum/models/milestone.dart';
 import 'package:kontinuum/models/mission.dart';
@@ -17,16 +18,16 @@ class HiveService {
 
   /// Keys = local 'yyyy-MM-dd' (via DateKeys.ymd)
   /// Values = List<Objective>
-  static const String objectivesByDateBoxName =
-      'objectivesByDateBox'; // untyped
+  static const String objectivesByDateBoxName = 'objectivesByDateBox';
 
   static const String statHistoryBoxName = 'statHistoryBox';
   static const String milestoneBoxName = 'milestoneBox';
   static const String activeMissionsBoxName = 'activeMissionsBox';
   static const String missionMetaBoxName = 'missionMetaBox';
+  static const String budgetsBoxName = 'budgetsBox';
 
-  // ---------- Legacy key parser (keep as defensive fallback) ----------
-  // Accepts either "YYYY-MM-DD" or full ISO like "YYYY-MM-DDTHH:MM:SS.mmmZ"
+  // ---------- Legacy key parser (defensive) ----------
+  // Accepts either "YYYY-MM-DD" or a full ISO, normalizes to local date.
   static DateTime _parseDayKey(String key) {
     final m = RegExp(r'^(\d{4})-(\d{2})-(\d{2})').firstMatch(key);
     if (m != null) {
@@ -36,12 +37,12 @@ class HiveService {
         int.parse(m.group(3)!),
       );
     }
-    // Fallback: try DateTime.parse, then strip to local date.
+    // Fallback: parse and clamp
     final dt = DateTime.parse(key);
     return DateKeys.dateOnly(dt);
   }
 
-  // ---------- Open helpers ----------
+  // ---------- open helpers ----------
   Future<Box<T>> _openBoxIfNeeded<T>(String name) async {
     if (Hive.isBoxOpen(name)) return Hive.box<T>(name);
     return Hive.openBox<T>(name);
@@ -73,7 +74,11 @@ class HiveService {
 
   Future<Map<String, Stat>> loadStats() async {
     final box = await _openBoxIfNeeded<Stat>(statBoxName);
-    return {for (final s in box.values) s.id: s};
+    final result = <String, Stat>{};
+    for (final s in box.values) {
+      result[s.id] = s;
+    }
+    return result;
   }
 
   // ---------- Categories ----------
@@ -101,9 +106,10 @@ class HiveService {
   }
 
   // ---------- Objectives by Date (UNtyped) ----------
-  /// Saves a map of local dates → objectives.
-  /// Keys are persisted as 'yyyy-MM-dd' via [DateKeys.ymd].
-  Future<void> saveObjectivesByDate(Map<DateTime, List<Objective>> data) async {
+  /// Save map<localDate,List<Objective>> with normalized keys.
+  Future<void> saveObjectivesByDate(
+    Map<DateTime, List<Objective>> data,
+  ) async {
     final box = await _openUntypedBoxIfNeeded(objectivesByDateBoxName);
     await box.clear();
 
@@ -111,34 +117,35 @@ class HiveService {
       for (final e in data.entries)
         DateKeys.ymd(DateKeys.dateOnly(e.key)): e.value,
     };
+
     await box.putAll(map);
   }
 
-  /// Loads and **normalizes** any legacy ISO keys to 'yyyy-MM-dd'.
+  /// Load and normalize legacy ISO keys to 'yyyy-MM-dd'.
   Future<Map<DateTime, List<Objective>>> loadObjectivesByDate() async {
     final box = await _openUntypedBoxIfNeeded(objectivesByDateBoxName);
     final out = <DateTime, List<Objective>>{};
     var changed = false;
 
-    for (final key in box.keys) {
-      if (key is! String) continue; // ignore unexpected keys
-      final day = _parseDayKey(key);
+    for (final rawKey in box.keys) {
+      if (rawKey is! String) continue;
+      final day = _parseDayKey(rawKey);
       final list =
-          (box.get(key) as List?)?.cast<Objective>() ?? const <Objective>[];
+          (box.get(rawKey) as List?)?.cast<Objective>() ?? const <Objective>[];
       out[day] = list;
 
-      // Normalize storage key to 'yyyy-MM-dd' for future runs.
       final desiredKey = DateKeys.ymd(day);
-      if (key != desiredKey) {
+      if (rawKey != desiredKey) {
         await box.put(desiredKey, list);
-        await box.delete(key);
+        await box.delete(rawKey);
         changed = true;
       }
     }
 
     if (changed) {
-      await box.flush(); // ensure normalized keys persist
+      await box.flush();
     }
+
     return out;
   }
 
@@ -180,6 +187,18 @@ class HiveService {
 
   Future<List<Mission>> loadActiveMissions() async {
     final box = await _openBoxIfNeeded<Mission>(activeMissionsBoxName);
+    return box.values.toList(growable: false);
+  }
+
+  // ---------- Budgets ----------
+  Future<void> saveBudgets(List<BudgetHive> budgets) async {
+    final box = await _openBoxIfNeeded<BudgetHive>(budgetsBoxName);
+    await box.clear();
+    await box.putAll({for (final b in budgets) b.id: b});
+  }
+
+  Future<List<BudgetHive>> loadBudgets() async {
+    final box = await _openBoxIfNeeded<BudgetHive>(budgetsBoxName);
     return box.values.toList(growable: false);
   }
 }

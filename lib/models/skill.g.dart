@@ -22,13 +22,14 @@ class SkillAdapter extends TypeAdapter<Skill> {
       categoryId: fields[2] as String,
       xp: fields[3] as int,
       stats: (fields[4] as List).cast<Stat>(),
+      weight: fields[5] == null ? 0.0 : fields[5] as double,
     );
   }
 
   @override
   void write(BinaryWriter writer, Skill obj) {
     writer
-      ..writeByte(5)
+      ..writeByte(6)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -38,7 +39,9 @@ class SkillAdapter extends TypeAdapter<Skill> {
       ..writeByte(3)
       ..write(obj.xp)
       ..writeByte(4)
-      ..write(obj.stats);
+      ..write(obj.stats)
+      ..writeByte(5)
+      ..write(obj.weight);
   }
 
   @override

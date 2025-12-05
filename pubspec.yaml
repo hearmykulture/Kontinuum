@@ -22,10 +22,11 @@ dependencies:
   characters: ^1.3.0
   auto_size_text: ^3.0.0
   animations: ^2.0.8
+  flutter_quill: ^11.5.0
 
   # 🎯 App Core
   provider: ^6.0.5
-  intl: ^0.18.1
+  intl: ^0.20.2
   uuid: ^4.0.0
   cupertino_icons: ^1.0.8
   flutter_colorpicker: ^1.0.4
@@ -40,6 +41,7 @@ dependencies:
   # 🎧 Audio (short SFX)
   soundpool: ^2.3.0
 
+  # Files / audio utils
   file_picker: ^10.2.3
   just_waveform: ^0.0.5
 
@@ -55,11 +57,9 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
-
-  # 🔧 Hive Type Adapter Generator
-  build_runner: ^2.4.6
+  # codegen
+  build_runner: ^2.4.13
   hive_generator: ^2.0.1
-
   # (Optional)
   dart_code_metrics: ^4.19.2
 
@@ -71,3 +71,5 @@ flutter:
     - assets/lottie/confetti.json
     - assets/audio/complete_chime.wav
     - assets/audio/levelup.wav
+    - assets/workout/library_seed.json
+    - assets/workout/exercisedb.json

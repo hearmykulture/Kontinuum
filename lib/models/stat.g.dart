@@ -23,13 +23,15 @@ class StatAdapter extends TypeAdapter<Stat> {
       xp: fields[3] as int,
       averageMinutesPerUnit: fields[4] as int,
       repsForMastery: fields[5] as int,
+      weight: fields[6] == null ? 0.0 : fields[6] as double,
+      parentSkillWeight: fields[7] == null ? 0.0 : fields[7] as double,
     );
   }
 
   @override
   void write(BinaryWriter writer, Stat obj) {
     writer
-      ..writeByte(6)
+      ..writeByte(8)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -41,7 +43,11 @@ class StatAdapter extends TypeAdapter<Stat> {
       ..writeByte(4)
       ..write(obj.averageMinutesPerUnit)
       ..writeByte(5)
-      ..write(obj.repsForMastery);
+      ..write(obj.repsForMastery)
+      ..writeByte(6)
+      ..write(obj.weight)
+      ..writeByte(7)
+      ..write(obj.parentSkillWeight);
   }
 
   @override

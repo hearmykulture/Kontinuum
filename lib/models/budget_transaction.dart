@@ -17,6 +17,10 @@ class BudgetTransaction extends HiveObject {
     this.pendingTransactionId,
     this.currency,
     this.reviewed = false,
+    this.manual = false,
+    this.flow,
+    this.accountType,
+    this.accountName,
   });
 
   @HiveField(0)
@@ -56,12 +60,28 @@ class BudgetTransaction extends HiveObject {
   @HiveField(11)
   bool reviewed;
 
+  @HiveField(12)
+  bool manual;
+
+  @HiveField(13)
+  String? flow;
+
+  @HiveField(14)
+  String? accountType;
+
+  @HiveField(15)
+  String? accountName;
+
   bool get removed => status == 'removed';
 
   BudgetTransaction copyWith({
     String? category,
     bool? reviewed,
     String? status,
+    bool? manual,
+    String? flow,
+    String? accountType,
+    String? accountName,
   }) =>
       BudgetTransaction(
         id: id,
@@ -76,6 +96,10 @@ class BudgetTransaction extends HiveObject {
         pendingTransactionId: pendingTransactionId,
         currency: currency,
         reviewed: reviewed ?? this.reviewed,
+        manual: manual ?? this.manual,
+        flow: flow ?? this.flow,
+        accountType: accountType ?? this.accountType,
+        accountName: accountName ?? this.accountName,
       );
 
   static BudgetTransaction fromApi(Map<String, dynamic> j) {
@@ -102,6 +126,10 @@ class BudgetTransaction extends HiveObject {
       pendingTransactionId: j['pendingTransactionId'] as String?,
       currency: j['currency'] as String?,
       reviewed: (j['reviewed'] as bool?) ?? false,
+      manual: (j['manual'] as bool?) ?? false,
+      flow: (j['type'] ?? j['flow']) as String?,
+      accountType: j['accountType'] as String?,
+      accountName: j['accountName'] as String?,
     );
   }
 }

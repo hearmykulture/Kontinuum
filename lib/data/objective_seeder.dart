@@ -1,3 +1,4 @@
+// lib/ui/seeders/objective_seeder.dart
 import 'package:kontinuum/models/objective.dart';
 import 'package:kontinuum/providers/objective_provider.dart';
 
@@ -26,7 +27,7 @@ class ObjectiveSeeder {
 
     provider.addObjective(
       title: "Write 8+ bars",
-      type: ObjectiveType.writingPrompt,
+      type: ObjectiveType.standard,
       categoryIds: ['RAPPING'],
       statIds: ['verses_written'],
       xpReward: 10,
@@ -286,6 +287,36 @@ class ObjectiveSeeder {
       targetAmount: 1,
       isStatic: true,
       activeDays: everyDay,
+    );
+
+    // --------------------------------------------------
+    // ✅ Abstinence seeders (flag-based)
+    // These assume: provider.addObjective(..., abstinenceEnabled: true)
+    // and that Objective has: bool abstinenceEnabled, DateTime? abstinenceStartDate, etc.
+    // --------------------------------------------------
+
+    provider.addObjective(
+      title: "No smoking / no cart",
+      type: ObjectiveType.standard,
+      categoryIds: ['HEALTH'],
+      statIds: const [],
+      xpReward: 15,
+      targetAmount: 1,
+      isStatic: true,
+      activeDays: everyDay,
+      abstinenceEnabled: true,
+    );
+
+    provider.addObjective(
+      title: "No drunk nights",
+      type: ObjectiveType.standard,
+      categoryIds: ['HEALTH'],
+      statIds: const [],
+      xpReward: 15,
+      targetAmount: 1,
+      isStatic: true,
+      activeDays: everyDay,
+      abstinenceEnabled: true,
     );
   }
 }

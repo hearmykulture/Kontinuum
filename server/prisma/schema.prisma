@@ -9,16 +9,16 @@ datasource db {
 }
 
 model BankItem {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   userId      String
-  plaidItemId String   @unique
+  plaidItemId String    @unique
   institution String?
-  status      String   @default("active")
+  status      String    @default("active")
   cursor      String?
-  paused      Boolean  @default(false)     // Phase 13
-  lastSyncAt  DateTime?                    // Phase 13
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  paused      Boolean   @default(false) // Phase 13
+  lastSyncAt  DateTime? // Phase 13
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   accounts BankAccount[]
   secret   PlaidSecret?
@@ -79,12 +79,21 @@ model BudgetGoal {
   @@unique([userId, month, category], name: "userId_month_category")
 }
 
-model UserSettings {                   // Phase 13
-  id                String   @id @default(cuid())
-  userId            String   @unique
-  bankSyncEnabled   Boolean  @default(true)
+model UserSettings {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  // keep features JSON so /finance/settings/features/* continues to work
+  features Json @default("{}")
+
+  // optional extras (fine to keep)
+  bankSyncEnabled   Boolean?
   consentVersion    String?
   consentAcceptedAt DateTime?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // canonical table name in DB (lowercase, unquoted)
+  @@map("usersettings")
 }

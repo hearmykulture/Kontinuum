@@ -38,13 +38,20 @@ class ObjectiveAdapter extends TypeAdapter<Objective> {
       completedAmounts: (fields[18] as Map?)?.cast<String, int>(),
       repeatEveryNDays: fields[19] as int?,
       repeatAnchorDate: fields[20] as DateTime?,
+      abstinenceStartDate: fields[21] as DateTime?,
+      abstinenceLastRelapseDate: fields[22] as DateTime?,
+      abstinenceCurrentStreakDays: fields[23] as int?,
+      abstinenceLongestStreakDays: fields[24] as int?,
+      abstinenceRelapsesByDate: (fields[25] as Map?)?.cast<String, bool>(),
+      abstinenceAutoCompleteDaily: fields[26] as bool?,
+      abstinenceEnabled: fields[27] as bool?,
     );
   }
 
   @override
   void write(BinaryWriter writer, Objective obj) {
     writer
-      ..writeByte(21)
+      ..writeByte(28)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -86,7 +93,21 @@ class ObjectiveAdapter extends TypeAdapter<Objective> {
       ..writeByte(19)
       ..write(obj.repeatEveryNDays)
       ..writeByte(20)
-      ..write(obj.repeatAnchorDate);
+      ..write(obj.repeatAnchorDate)
+      ..writeByte(21)
+      ..write(obj.abstinenceStartDate)
+      ..writeByte(22)
+      ..write(obj.abstinenceLastRelapseDate)
+      ..writeByte(23)
+      ..write(obj.abstinenceCurrentStreakDays)
+      ..writeByte(24)
+      ..write(obj.abstinenceLongestStreakDays)
+      ..writeByte(25)
+      ..write(obj.abstinenceRelapsesByDate)
+      ..writeByte(26)
+      ..write(obj.abstinenceAutoCompleteDaily)
+      ..writeByte(27)
+      ..write(obj.abstinenceEnabled);
   }
 
   @override
@@ -112,13 +133,15 @@ class ObjectiveTypeAdapter extends TypeAdapter<ObjectiveType> {
       case 1:
         return ObjectiveType.tally;
       case 2:
-        return ObjectiveType.writingPrompt;
+        return ObjectiveType.standard;
       case 3:
         return ObjectiveType.stopwatch;
       case 4:
         return ObjectiveType.subtask;
       case 5:
-        return ObjectiveType.reflective;
+        return ObjectiveType.standard;
+      case 6:
+        return ObjectiveType.abstinence;
       default:
         return ObjectiveType.standard;
     }
@@ -133,17 +156,14 @@ class ObjectiveTypeAdapter extends TypeAdapter<ObjectiveType> {
       case ObjectiveType.tally:
         writer.writeByte(1);
         break;
-      case ObjectiveType.writingPrompt:
-        writer.writeByte(2);
-        break;
       case ObjectiveType.stopwatch:
         writer.writeByte(3);
         break;
       case ObjectiveType.subtask:
         writer.writeByte(4);
         break;
-      case ObjectiveType.reflective:
-        writer.writeByte(5);
+      case ObjectiveType.abstinence:
+        writer.writeByte(6);
         break;
     }
   }

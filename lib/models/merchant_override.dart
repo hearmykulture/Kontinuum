@@ -1,4 +1,5 @@
 import 'package:hive/hive.dart';
+import 'package:kontinuum/core/time/app_clock.dart';
 
 part 'merchant_override.g.dart';
 
@@ -8,7 +9,7 @@ class MerchantOverride extends HiveObject {
     required this.merchantKey,
     required this.category,
     DateTime? updatedAt,
-  }) : updatedAt = updatedAt ?? DateTime.now();
+  }) : updatedAt = updatedAt ?? AppClock.now();
 
   /// Normalized merchant name (lowercased, trimmed).
   @HiveField(0)

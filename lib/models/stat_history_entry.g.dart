@@ -21,13 +21,14 @@ class StatHistoryEntryAdapter extends TypeAdapter<StatHistoryEntry> {
       date: fields[1] as DateTime,
       amount: fields[2] as int,
       skillId: fields[3] as String?,
+      xpDelta: (fields[4] ?? 0) as int,
     );
   }
 
   @override
   void write(BinaryWriter writer, StatHistoryEntry obj) {
     writer
-      ..writeByte(4)
+      ..writeByte(5)
       ..writeByte(0)
       ..write(obj.statId)
       ..writeByte(1)
@@ -35,7 +36,9 @@ class StatHistoryEntryAdapter extends TypeAdapter<StatHistoryEntry> {
       ..writeByte(2)
       ..write(obj.amount)
       ..writeByte(3)
-      ..write(obj.skillId);
+      ..write(obj.skillId)
+      ..writeByte(4)
+      ..write(obj.xpDelta);
   }
 
   @override

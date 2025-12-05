@@ -36,6 +36,8 @@ PODS:
     - DKImagePickerController/PhotoGallery
     - Flutter
   - Flutter (1.0.0)
+  - flutter_keyboard_visibility_temp_fork (0.0.1):
+    - Flutter
   - just_waveform (0.0.1):
     - Flutter
     - FlutterMacOS
@@ -48,22 +50,29 @@ PODS:
   - plaid_flutter (0.0.1):
     - Flutter
     - Plaid (= 5.6.1)
-  - SDWebImage (5.21.3):
-    - SDWebImage/Core (= 5.21.3)
-  - SDWebImage/Core (5.21.3)
+  - quill_native_bridge_ios (0.0.1):
+    - Flutter
+  - SDWebImage (5.21.4):
+    - SDWebImage/Core (= 5.21.4)
+  - SDWebImage/Core (5.21.4)
   - soundpool (0.0.1):
     - Flutter
   - SwiftyGif (5.4.5)
+  - url_launcher_ios (0.0.1):
+    - Flutter
 
 DEPENDENCIES:
   - device_info_plus (from `.symlinks/plugins/device_info_plus/ios`)
   - file_picker (from `.symlinks/plugins/file_picker/ios`)
   - Flutter (from `Flutter`)
+  - flutter_keyboard_visibility_temp_fork (from `.symlinks/plugins/flutter_keyboard_visibility_temp_fork/ios`)
   - just_waveform (from `.symlinks/plugins/just_waveform/darwin`)
   - path_provider_foundation (from `.symlinks/plugins/path_provider_foundation/darwin`)
   - permission_handler_apple (from `.symlinks/plugins/permission_handler_apple/ios`)
   - plaid_flutter (from `.symlinks/plugins/plaid_flutter/ios`)
+  - quill_native_bridge_ios (from `.symlinks/plugins/quill_native_bridge_ios/ios`)
   - soundpool (from `.symlinks/plugins/soundpool/ios`)
+  - url_launcher_ios (from `.symlinks/plugins/url_launcher_ios/ios`)
 
 SPEC REPOS:
   trunk:
@@ -80,6 +89,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/file_picker/ios"
   Flutter:
     :path: Flutter
+  flutter_keyboard_visibility_temp_fork:
+    :path: ".symlinks/plugins/flutter_keyboard_visibility_temp_fork/ios"
   just_waveform:
     :path: ".symlinks/plugins/just_waveform/darwin"
   path_provider_foundation:
@@ -88,8 +99,12 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/permission_handler_apple/ios"
   plaid_flutter:
     :path: ".symlinks/plugins/plaid_flutter/ios"
+  quill_native_bridge_ios:
+    :path: ".symlinks/plugins/quill_native_bridge_ios/ios"
   soundpool:
     :path: ".symlinks/plugins/soundpool/ios"
+  url_launcher_ios:
+    :path: ".symlinks/plugins/url_launcher_ios/ios"
 
 SPEC CHECKSUMS:
   device_info_plus: 335f3ce08d2e174b9fdc3db3db0f4e3b1f66bd89
@@ -97,14 +112,17 @@ SPEC CHECKSUMS:
   DKPhotoGallery: b3834fecb755ee09a593d7c9e389d8b5d6deed60
   file_picker: a0560bc09d61de87f12d246fc47d2119e6ef37be
   Flutter: e0871f40cf51350855a761d2e70bf5af5b9b5de7
+  flutter_keyboard_visibility_temp_fork: 95b2d534bacf6ac62e7fcbe5c2a9e2c2a17ce06f
   just_waveform: be2cb6dec86096cb972bf8b73c893fe16bf1cff4
   path_provider_foundation: 080d55be775b7414fd5a5ef3ac137b97b097e564
   permission_handler_apple: 4ed2196e43d0651e8ff7ca3483a069d469701f2d
   Plaid: 93c9e80b93f5cea960a1120047ef2b689394ff91
   plaid_flutter: b3a634a996d2873ac58acf7c9a1dafd2d40bcbb0
-  SDWebImage: 16309af6d214ba3f77a7c6f6fdda888cb313a50a
+  quill_native_bridge_ios: f47af4b14e7757968486641656c5d23250cee521
+  SDWebImage: d0184764be51240d49c761c37f53dd017e1ccaaf
   soundpool: cbfc34dbc42a1bb19426aaccf20e9cdd250b45e5
   SwiftyGif: 706c60cf65fa2bc5ee0313beece843c8eb8194d4
+  url_launcher_ios: 694010445543906933d732453a59da0a173ae33d
 
 PODFILE CHECKSUM: 4eca74a0379b8d02e185227b6acfe34692710628
 

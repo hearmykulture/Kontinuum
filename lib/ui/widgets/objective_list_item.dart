@@ -18,6 +18,12 @@ import 'package:kontinuum/providers/objective_provider.dart';
 import 'package:kontinuum/ui/widgets/objective_detail_popup.dart';
 import 'package:kontinuum/ui/widgets/xp_gain_bottom_bar.dart' as xpoverlay;
 
+// 🔥 bring back the per-objective streak badge
+import 'package:kontinuum/ui/widgets/streak/objective_flame_badge.dart';
+
+// ✅ abstinence mini sheet
+import 'package:kontinuum/ui/widgets/objective/abstinence_sheet.dart';
+
 /// ---- Stacking SFX (fire-and-forget; multiple overlaps allowed) -------------
 class _Sfx {
   _Sfx._();
@@ -62,6 +68,7 @@ class _Sfx {
 
 /// Objective card background
 const Color kObjectiveCardBg = Color(0xFF13151B);
+const Color kAbstinenceCardBg = Color(0xFF1B1517);
 
 /// Sent upward to make XpLevelBar jump+animate.
 class XpBarJumpNotification extends Notification {
@@ -92,6 +99,11 @@ class ObjectiveListItem extends StatefulWidget {
 class _ObjectiveListItemState extends State<ObjectiveListItem> {
   int _statIndex = 0;
   final Map<String, int> _lastXp = {};
+  bool _confettiVisible = false;
+  int _confettiSeed = 0;
+  Offset? _confettiOffset;
+  final GlobalKey _cardKey = GlobalKey();
+  final GlobalKey _confettiOriginKey = GlobalKey();
 
   /// Previous completion state to detect rising edge.
   bool? _prevCompletedForCheck;
@@ -152,28 +164,25 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
     return idx == -1 ? widget.objective : list[idx];
   }
 
-  void _showConfettiOverlay(BuildContext context) {
-    late OverlayEntry entry;
-    entry = OverlayEntry(
-      builder: (_) => IgnorePointer(
-        child: Positioned.fill(
-          child: Center(
-            child: SizedBox(
-              width: 160,
-              height: 160,
-              child: LottieOnce(
-                asset: 'assets/lottie/confetti.json',
-                play: true,
-                repeat: false,
-                onCompleted: () => entry.remove(),
-                fit: BoxFit.contain,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-    Overlay.of(context, rootOverlay: true).insert(entry);
+  void _playConfettiLocal() {
+    final cardBox = _cardKey.currentContext?.findRenderObject() as RenderBox?;
+    final originBox =
+        _confettiOriginKey.currentContext?.findRenderObject() as RenderBox?;
+    Offset? local;
+    if (cardBox != null && originBox != null) {
+      final originGlobal =
+          originBox.localToGlobal(originBox.size.center(Offset.zero));
+      final cardOrigin = cardBox.localToGlobal(Offset.zero);
+      local = originGlobal - cardOrigin;
+    }
+
+    if (local == null) return;
+
+    setState(() {
+      _confettiSeed++;
+      _confettiOffset = local;
+      _confettiVisible = true;
+    });
   }
 
   @override
@@ -222,36 +231,80 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
           child: RepaintBoundary(
             child: Material(
               color: Colors.transparent,
-              child: Selector<ObjectiveProvider, bool>(
-                selector: (_, p) => _liveObjective(p).isCompleted,
-                builder: (_, isCompleted, __) {
+              child: Selector<ObjectiveProvider, _CardVisualState>(
+                selector: (_, p) {
+                  final live = _liveObjective(p);
+                  return _CardVisualState(
+                    isCompleted: live.isCompleted,
+                    isAbstinence: live.isAbstinence,
+                  );
+                },
+                builder: (_, state, __) {
+                  final isCompleted = state.isCompleted;
+                  final isAbstinence = state.isAbstinence;
+                  final EdgeInsets cardMargin = EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: isAbstinence ? 4 : 6,
+                  );
+                  final EdgeInsets cardPadding = isAbstinence
+                      ? const EdgeInsets.symmetric(horizontal: 10, vertical: 8)
+                      : const EdgeInsets.all(12);
+                  final BorderRadius cardRadius =
+                      BorderRadius.circular(isAbstinence ? 10 : 12);
                   return AnimatedOpacity(
                     duration: const Duration(milliseconds: 250),
                     opacity: isCompleted ? 0.60 : 1.0,
-                    child: Container(
-                      margin: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 6),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: kObjectiveCardBg,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: isCompleted
-                              ? Colors.greenAccent.withAlpha(90)
-                              : Colors.white.withValues(alpha: .08),
-                          width: 1,
-                        ),
-                        boxShadow: [
-                          if (isCompleted)
-                            BoxShadow(
-                              color: Colors.greenAccent.withAlpha(40),
-                              blurRadius: 6,
-                              spreadRadius: 1,
-                              offset: const Offset(0, 2),
+                    child: Stack(
+                      clipBehavior: Clip.hardEdge,
+                      children: [
+                        Container(
+                          key: _cardKey,
+                          margin: cardMargin,
+                          padding: cardPadding,
+                          decoration: BoxDecoration(
+                            color:
+                                isAbstinence ? kAbstinenceCardBg : kObjectiveCardBg,
+                            borderRadius: cardRadius,
+                            border: Border.all(
+                              color: isCompleted
+                                  ? Colors.greenAccent.withAlpha(90)
+                                  : (isAbstinence
+                                      ? Colors.redAccent.withAlpha(70)
+                                      : Colors.white.withValues(alpha: .08)),
+                              width: 1,
                             ),
-                        ],
-                      ),
-                      child: _buildContent(context),
+                            boxShadow: [
+                              if (isCompleted)
+                                BoxShadow(
+                                  color: Colors.greenAccent.withAlpha(40),
+                                  blurRadius: 6,
+                                  spreadRadius: 1,
+                                  offset: const Offset(0, 2),
+                                ),
+                            ],
+                          ),
+                          child: _buildContent(context),
+                        ),
+                        if (_confettiVisible)
+                          Positioned(
+                            left: (_confettiOffset?.dx ?? 0) - 80,
+                            top: (_confettiOffset?.dy ?? 0) - 80,
+                            width: 160,
+                            height: 160,
+                            child: IgnorePointer(
+                              child: LottieOnce(
+                                key: ValueKey('confetti_$_confettiSeed'),
+                                asset: 'assets/lottie/confetti.json',
+                                play: true,
+                                repeat: false,
+                                onCompleted: () => setState(() {
+                                  _confettiVisible = false;
+                                }),
+                                fit: BoxFit.contain,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   );
                 },
@@ -266,51 +319,56 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
   Widget _buildContent(BuildContext context) {
     final provider = context.read<ObjectiveProvider>();
 
-    final isLocked = widget.objective.isLocked;
-    final isStopwatch = _isStopwatch(widget.objective.type);
-    final isTally = _isTally(widget.objective.type);
-    final isWriting = _isWriting(widget.objective.type);
-    final isStandard = !isStopwatch && !isTally && !isWriting;
+    // ✅ always work off live instance (day overrides)
+    final liveObj = provider
+        .getObjectivesForDay(widget.selectedDate)
+        .firstWhere((o) => o.id == widget.objective.id, orElse: () {
+      return widget.objective;
+    });
+
+    final isLocked = liveObj.isLocked;
+    final isStopwatch = _isStopwatch(liveObj.type);
+    final isTally = _isTally(liveObj.type);
+    final isWriting = _isWriting(liveObj.type);
+    final isAbstinence = liveObj.isAbstinence; // ✅ unified flag
+    final isStandard = !isStopwatch && !isTally && !isWriting && !isAbstinence;
 
     Widget topRow;
     if (isLocked) {
-      topRow = _lockedRow();
+      topRow = _lockedRow(liveObj);
+    } else if (isAbstinence) {
+      topRow = _abstinenceRow(provider, liveObj);
     } else if (isTally) {
-      topRow = _tallyRow();
+      topRow = _tallyRow(liveObj);
     } else if (isWriting) {
-      topRow = _standardRow(provider, showCheck: true);
+      topRow = _standardRow(liveObj, provider, showCheck: true);
     } else if (isStopwatch) {
-      topRow = _stopwatchRow(context, provider);
+      topRow = _stopwatchRow(context, provider, liveObj);
     } else if (isStandard) {
-      topRow = _standardRow(provider, showCheck: true);
+      topRow = _standardRow(liveObj, provider, showCheck: true);
     } else {
-      topRow = _standardRow(provider, showCheck: true);
+      topRow = _standardRow(liveObj, provider, showCheck: true);
     }
 
-    final hasStats = widget.objective.statIds.isNotEmpty;
+    final hasStats = liveObj.statIds.isNotEmpty;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         topRow,
         if (!isLocked && isStopwatch) const SizedBox(height: 4),
-        const SizedBox(height: 10),
-        _xpAndStatRow(),
         const SizedBox(height: 6),
-        Wrap(
-          spacing: 6,
-          runSpacing: 4,
-          children: widget.objective.categoryIds.map(_categoryChip).toList(),
-        ),
-        if (hasStats) const SizedBox(height: 8),
-        if (hasStats) _miniStatXpBar(context),
+        _xpAndStatRow(liveObj),
+        if (hasStats)
+          const SizedBox(height: 6), // ⬅️ tightened to avoid overflow
+        if (hasStats) _miniStatXpBar(context, liveObj),
       ],
     );
   }
 
   // ---------- Compact, tappable stat XP bar ----------
-  Widget _miniStatXpBar(BuildContext context) {
-    final ids = widget.objective.statIds;
+  Widget _miniStatXpBar(BuildContext context, Objective liveObj) {
+    final ids = liveObj.statIds;
     if (ids.isEmpty) return const SizedBox.shrink();
 
     if (_statIndex >= ids.length) _statIndex = 0;
@@ -349,14 +407,21 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
           final prevXp = _lastXp[statId] ?? xp;
           _lastXp[statId] = xp;
 
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+          final hasMultipleStats = liveObj.statIds.length > 1;
+
+          Widget statLabel() {
+            return SizedBox(
+              width: double.infinity,
+              child: Stack(
+                alignment: Alignment.center,
                 children: [
-                  Expanded(
+                  Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: hasMultipleStats ? 20 : 0,
+                    ),
                     child: Text(
                       '$display • Lv $level',
+                      textAlign: TextAlign.center,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -366,16 +431,37 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
                       ),
                     ),
                   ),
-                  if (widget.objective.statIds.length > 1)
-                    const SizedBox(width: 6),
-                  if (widget.objective.statIds.length > 1)
-                    const Icon(Icons.swap_horiz,
-                        size: 12, color: Colors.white38),
-                  if (widget.objective.statIds.length > 1)
-                    const Text('  ', style: TextStyle(fontSize: 10)),
+                  if (hasMultipleStats)
+                    const Positioned(
+                      right: 0,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.swap_horiz,
+                            size: 12,
+                            color: Colors.white38,
+                          ),
+                          SizedBox(width: 4),
+                        ],
+                      ),
+                    ),
                 ],
               ),
-              const SizedBox(height: 4),
+            );
+          }
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              MiniXpNumbers(
+                level: level,
+                step: stepInt,
+                currentWithin: currentWithin,
+                totalMaxXp: maxXp,
+                color: color,
+              ),
+              const SizedBox(height: 6),
               Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(8),
@@ -396,14 +482,8 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
                   ),
                 ),
               ),
-              const SizedBox(height: 3),
-              MiniXpNumbers(
-                level: level,
-                step: stepInt,
-                currentWithin: currentWithin,
-                totalMaxXp: maxXp,
-                color: color,
-              ),
+              const SizedBox(height: 6),
+              statLabel(),
             ],
           );
         },
@@ -411,12 +491,18 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
     );
   }
 
-  Widget _titleBlock({required bool showAmountLine}) {
+  Widget _titleBlock({
+    required Objective objective,
+    required bool showAmountLine,
+  }) {
+    final hasAmountLine = showAmountLine && objective.targetAmount > 1;
+    final hasCategories = objective.categoryIds.isNotEmpty;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          widget.objective.title,
+          objective.title,
           style: const TextStyle(
             color: Colors.white,
             fontSize: ObjectiveTokens.kCardTitleSize,
@@ -424,17 +510,17 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
             height: 1.2,
           ),
         ),
-        if (showAmountLine && widget.objective.targetAmount > 1) ...[
+        if (hasAmountLine) ...[
           const SizedBox(height: 4),
           Selector<ObjectiveProvider, int>(
             selector: (ctx, p) {
               final list = p.getObjectivesForDay(widget.selectedDate);
-              final idx = list.indexWhere((o) => o.id == widget.objective.id);
-              final obj = idx == -1 ? widget.objective : list[idx];
+              final idx = list.indexWhere((o) => o.id == objective.id);
+              final obj = idx == -1 ? objective : list[idx];
               return obj.getCompletedAmount(widget.selectedDate);
             },
             builder: (_, amount, __) => Text(
-              "$amount / ${widget.objective.targetAmount}",
+              "$amount / ${objective.targetAmount}",
               style: const TextStyle(
                 color: Colors.white54,
                 fontSize: ObjectiveTokens.kMicroSize,
@@ -442,11 +528,20 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
             ),
           ),
         ],
+        if (hasCategories) ...[
+          SizedBox(height: hasAmountLine ? 6 : 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            children:
+                objective.categoryIds.map((id) => _categoryChip(id)).toList(),
+          ),
+        ],
       ],
     );
   }
 
-  Widget _lockedRow() {
+  Widget _lockedRow(Objective objective) {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
       decoration: BoxDecoration(
@@ -455,65 +550,90 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
         border:
             Border.all(color: Colors.white.withValues(alpha: .10), width: 1),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.lock, size: 16, color: Colors.grey),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              widget.objective.title,
-              style: const TextStyle(
-                fontSize: ObjectiveTokens.kCardTitleSize,
-                fontWeight: FontWeight.w400,
-                color: Colors.grey,
-                height: 1.2,
+          Row(
+            children: [
+              const Icon(Icons.lock, size: 16, color: Colors.grey),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  objective.title,
+                  style: const TextStyle(
+                    fontSize: ObjectiveTokens.kCardTitleSize,
+                    fontWeight: FontWeight.w400,
+                    color: Colors.grey,
+                    height: 1.2,
+                  ),
+                ),
               ),
-            ),
+              if (objective.lockedReason != null)
+                Tooltip(
+                  message: objective.lockedReason!,
+                  child: const Icon(
+                    Icons.info_outline,
+                    size: 14,
+                    color: Colors.grey,
+                  ),
+                ),
+            ],
           ),
-          if (widget.objective.lockedReason != null)
-            Tooltip(
-              message: widget.objective.lockedReason!,
-              child:
-                  const Icon(Icons.info_outline, size: 14, color: Colors.grey),
+          if (objective.categoryIds.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children:
+                  objective.categoryIds.map((id) => _categoryChip(id)).toList(),
             ),
+          ],
         ],
       ),
     );
   }
 
-  // Standard row (anchored confetti + SFX ONLY on user-initiated rising edge)
-  Widget _standardRow(ObjectiveProvider provider, {required bool showCheck}) {
+  // Standard row
+  Widget _standardRow(
+    Objective objective,
+    ObjectiveProvider provider, {
+    required bool showCheck,
+  }) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(
-          child: _titleBlock(showAmountLine: widget.objective.targetAmount > 1),
+          child: _titleBlock(
+            objective: objective,
+            showAmountLine: objective.targetAmount > 1,
+          ),
         ),
+        const SizedBox(width: 8),
+        // 🔥 streak badge lives here
+        ObjectiveFlameBadge(objectiveId: objective.id),
         if (showCheck) ...[
           const SizedBox(width: 8),
           Selector<ObjectiveProvider, bool>(
             selector: (_, p) => _liveObjective(p).isCompleted,
             builder: (_, isCompleted, __) {
-              // Fire effects ONLY when:
-              // 1) completion just turned true (rising edge), AND
-              // 2) the user armed this card (they tapped the check).
               final playEffects = _armCompleteEffects &&
                   isCompleted &&
                   (_prevCompletedForCheck == false);
 
               if (playEffects) {
                 WidgetsBinding.instance.addPostFrameCallback((_) {
+                  _playConfettiLocal();
                   _Sfx.instance.playComplete();
                   _armCompleteEffects = false; // consume the latch
                 });
               }
 
-              // Always re-baseline after the frame
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 _prevCompletedForCheck = isCompleted;
               });
 
               return SizedBox(
+                key: _confettiOriginKey,
                 width: 40,
                 height: 40,
                 child: Stack(
@@ -524,16 +644,14 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
                       isCompleted: isCompleted,
                       onToggle: () {
                         HapticFeedback.selectionClick();
-
-                        // Arm effects for THIS user action
                         _armCompleteEffects = true;
 
-                        final catName = _primaryCategoryName(); // null => TOTAL
+                        final catName = _primaryCategoryName();
                         final before = _lookupCategoryXp(provider, catName);
 
                         provider.toggleObjectiveCompletion(
                           widget.selectedDate,
-                          widget.objective.id,
+                          objective.id,
                         );
 
                         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -558,30 +676,6 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
                         });
                       },
                     ),
-
-                    // 🎉 Anchored confetti plays only when playEffects == true
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: OverflowBox(
-                          minWidth: 0,
-                          minHeight: 0,
-                          maxWidth: _kCheckConfettiSize,
-                          maxHeight: _kCheckConfettiSize,
-                          child: Center(
-                            child: SizedBox(
-                              width: _kCheckConfettiSize,
-                              height: _kCheckConfettiSize,
-                              child: LottieOnce(
-                                asset: 'assets/lottie/confetti.json',
-                                play: playEffects,
-                                repeat: false,
-                                fit: BoxFit.contain,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
                   ],
                 ),
               );
@@ -592,44 +686,139 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
     );
   }
 
-  Widget _stopwatchRow(BuildContext context, ObjectiveProvider provider) {
+  // ✅ Abstinence row (only for abstinence objectives now)
+  Widget _abstinenceRow(ObjectiveProvider provider, Objective live) {
+    final daysClean = provider.getAbstinenceDays(live.id, widget.selectedDate);
+    final hasRelapseToday = live.isRelapseOn(widget.selectedDate);
+
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(child: _titleBlock(showAmountLine: true)),
-        const SizedBox(width: 8),
-        SizedBox(
-          height: ObjectiveTokens.kRowHeight,
-          child: FilledButton.icon(
-            onPressed: () {
-              HapticFeedback.selectionClick();
-              _openStopwatchSheet(context, provider);
-            },
-            style: FilledButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              backgroundColor: Colors.deepPurpleAccent.withAlpha(46),
-              foregroundColor: Colors.deepPurpleAccent,
-              minimumSize: const Size(0, ObjectiveTokens.kRowHeight),
+        // title
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                live.title,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: ObjectiveTokens.kCardTitleSize,
+                  fontWeight: FontWeight.w400,
+                  height: 1.2,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 5,
+                runSpacing: 3,
+                children: [
+                  ...live.categoryIds.map((id) => _categoryChip(id)),
+                  _abstinenceCleanChip(daysClean),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 6),
+        // streak badge
+        ObjectiveFlameBadge(objectiveId: live.id),
+        const SizedBox(width: 4),
+        // relapse action
+        Tooltip(
+          message: hasRelapseToday
+              ? 'Relapse already logged today'
+              : 'Log relapse for today',
+          child: IconButton(
+            visualDensity: VisualDensity.compact,
+            style: IconButton.styleFrom(
+              backgroundColor: hasRelapseToday
+                  ? Colors.redAccent.withAlpha(40)
+                  : Colors.redAccent.withAlpha(16),
             ),
-            icon: const Icon(Icons.timer, size: 18),
-            label: const Text('Start', style: TextStyle(fontSize: 12)),
+            onPressed: hasRelapseToday
+                ? null
+                : () async {
+                    HapticFeedback.mediumImpact();
+                    await provider.logAbstinenceRelapse(
+                      live.id,
+                      widget.selectedDate,
+                    );
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'Relapse logged for "${live.title}". Streak reset.',
+                        ),
+                      ),
+                    );
+                  },
+            icon: Icon(
+              Icons.restart_alt_rounded,
+              color: hasRelapseToday
+                  ? Colors.redAccent.withAlpha(180)
+                  : Colors.redAccent,
+              size: 20,
+            ),
           ),
         ),
       ],
     );
   }
 
-  /// Reactive tally row (only plays when YOU increment to target)
-  Widget _tallyRow() {
+  Widget _stopwatchRow(
+    BuildContext context,
+    ObjectiveProvider provider,
+    Objective objective,
+  ) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(child: _titleBlock(showAmountLine: true)),
+        Expanded(
+          child: _titleBlock(objective: objective, showAmountLine: true),
+        ),
+        const SizedBox(width: 8),
+        // 🔥 keep badge on stopwatch too
+        ObjectiveFlameBadge(objectiveId: objective.id),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 40,
+          height: 40,
+          child: Material(
+            color: Colors.deepPurpleAccent.withAlpha(46),
+            shape: const CircleBorder(),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: () {
+                HapticFeedback.selectionClick();
+                _openStopwatchSheet(context, provider);
+              },
+              child: const Center(
+                child: Icon(Icons.timer, size: 18, color: Colors.deepPurpleAccent),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Reactive tally row
+  Widget _tallyRow(Objective objective) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: _titleBlock(objective: objective, showAmountLine: true),
+        ),
+        const SizedBox(width: 8),
+        // 🔥 keep badge on tally
+        ObjectiveFlameBadge(objectiveId: objective.id),
         const SizedBox(width: 8),
         Selector<ObjectiveProvider, int>(
           selector: (_, p) {
             final list = p.getObjectivesForDay(widget.selectedDate);
-            final idx = list.indexWhere((o) => o.id == widget.objective.id);
+            final idx = list.indexWhere((o) => o.id == objective.id);
             if (idx == -1) return 0;
             return list[idx].getCompletedAmount(widget.selectedDate);
           },
@@ -638,37 +827,33 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
               amount: amount,
               min: 0,
               max: 1 << 31,
-              target: widget.objective.targetAmount,
+              target: objective.targetAmount,
               rowHeight: ObjectiveTokens.kRowHeight,
               numberFontSize: ObjectiveTokens.kStepperNumber,
               radius: 18,
               onChanged: (next) {
                 final p = context.read<ObjectiveProvider>();
+
+                final oldAmount = amount;
+                final crossedNow = oldAmount < objective.targetAmount &&
+                    next >= objective.targetAmount;
+
+                final catName = _primaryCategoryName();
+                final before = _lookupCategoryXp(p, catName);
+
                 p.updateObjectiveAmountForDate(
                   widget.selectedDate,
-                  widget.objective.id,
+                  objective.id,
                   next,
                 );
 
-                // Only when the user *just* reached target, mark complete + effects.
-                final live = _liveObjective(p);
-                final reached = next >= widget.objective.targetAmount;
-                if (reached && !live.isCompleted) {
-                  _armCompleteEffects = true; // arm for this user action
+                if (crossedNow) {
+                  _armCompleteEffects = true;
 
-                  final catName = _primaryCategoryName();
-                  final before = _lookupCategoryXp(p, catName);
-
-                  p.toggleObjectiveCompletion(
-                    widget.selectedDate,
-                    widget.objective.id,
-                  );
-
-                  // Center confetti + stacked chime (immediate, not via builder)
-                  _showConfettiOverlay(context);
+                  _playConfettiLocal();
                   WidgetsBinding.instance.addPostFrameCallback((_) {
                     _Sfx.instance.playComplete();
-                    _armCompleteEffects = false; // consume latch
+                    _armCompleteEffects = false;
                   });
 
                   WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -701,9 +886,9 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
   }
 
   // ---------- Meta rows ----------
-  Widget _xpAndStatRow() {
-    final showXp = !widget.objective.isLocked;
-    final showStats = widget.objective.statIds.isNotEmpty;
+  Widget _xpAndStatRow(Objective liveObj) {
+    final showXp = !liveObj.isLocked && !liveObj.isAbstinence;
+    final showStats = liveObj.statIds.isNotEmpty;
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
@@ -717,7 +902,7 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
           ),
         if (showXp)
           Text(
-            "${widget.objective.xpReward} XP",
+            "${liveObj.xpReward} XP",
             style: const TextStyle(
               fontSize: ObjectiveTokens.kMetaSize,
               color: Colors.amber,
@@ -737,7 +922,7 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
                 const SizedBox(width: 4),
                 Expanded(
                   child: Text(
-                    widget.objective.statIds
+                    liveObj.statIds
                         .map((id) => StatRepository.getDisplay(id))
                         .join(', '),
                     style: const TextStyle(
@@ -754,25 +939,55 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
     );
   }
 
-  Widget _categoryChip(String categoryId) {
-    final color = ObjectiveTokens.categoryColors[categoryId] ?? Colors.white;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withAlpha(38),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: color.withAlpha(102), width: 0.5),
+// ✅ thinner category pills
+Widget _categoryChip(String categoryId) {
+  final color = ObjectiveTokens.categoryColors[categoryId] ?? Colors.white;
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+    decoration: BoxDecoration(
+        color: color.withAlpha(32),
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: color.withAlpha(90), width: 0.5),
       ),
       child: Text(
         categoryId,
         style: TextStyle(
-          fontSize: ObjectiveTokens.kBadgeSize,
+          fontSize: ObjectiveTokens.kBadgeSize - 1,
           color: color,
           fontWeight: FontWeight.w600,
+          height: 1.0,
         ),
       ),
     );
   }
+
+Widget _abstinenceCleanChip(int days) {
+  const iconColor = Colors.orangeAccent;
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+    decoration: BoxDecoration(
+      color: iconColor.withAlpha(32),
+      borderRadius: BorderRadius.circular(5),
+      border: Border.all(color: iconColor.withAlpha(90), width: 0.5),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(Icons.local_fire_department, size: 12, color: iconColor),
+        const SizedBox(width: 4),
+        Text(
+          '$days day${days == 1 ? '' : 's'} clean',
+          style: const TextStyle(
+            fontSize: ObjectiveTokens.kBadgeSize - 1,
+            color: iconColor,
+            fontWeight: FontWeight.w600,
+            height: 1.0,
+          ),
+        ),
+      ],
+    ),
+  );
+}
 
   void _openStopwatchSheet(BuildContext context, ObjectiveProvider provider) {
     showModalBottomSheet<void>(
@@ -797,7 +1012,6 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
           );
         },
         onMarkComplete: () {
-          // Arm for this user intent.
           _armCompleteEffects = true;
 
           final catName = _primaryCategoryName();
@@ -811,8 +1025,7 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
             );
           }
 
-          // Immediate effects here (not via builder)
-          _showConfettiOverlay(context);
+          _playConfettiLocal();
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _Sfx.instance.playComplete();
             _armCompleteEffects = false;
@@ -840,4 +1053,25 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
       ),
     );
   }
+}
+
+class _CardVisualState {
+  final bool isCompleted;
+  final bool isAbstinence;
+
+  const _CardVisualState({
+    required this.isCompleted,
+    required this.isAbstinence,
+  });
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is _CardVisualState &&
+        other.isCompleted == isCompleted &&
+        other.isAbstinence == isAbstinence;
+  }
+
+  @override
+  int get hashCode => Object.hash(isCompleted, isAbstinence);
 }

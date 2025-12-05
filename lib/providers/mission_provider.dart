@@ -9,6 +9,7 @@ import 'package:kontinuum/providers/objective_provider.dart';
 import 'package:kontinuum/data/mission_seeder.dart';
 import 'package:kontinuum/data/hive_service.dart';
 import 'package:kontinuum/utils/date_keys.dart';
+import 'package:kontinuum/core/time/app_clock.dart';
 
 class MissionProvider with ChangeNotifier {
   // ===== Config =====
@@ -17,11 +18,6 @@ class MissionProvider with ChangeNotifier {
   // Centralized box names
   static const String _boxName = HiveService.activeMissionsBoxName;
   static const String _metaBoxName = HiveService.missionMetaBoxName;
-
-  // Rarity weights (kept for future weighting tweaks)
-  static const int _wtCommon = 65;
-  static const int _wtRare = 28;
-  static const int _wtLegendary = 7;
 
   // Suggested + board rarity policy
   static const int _maxLegendarySuggested = 1; // among the 2 “Suggested”
@@ -74,6 +70,18 @@ class MissionProvider with ChangeNotifier {
   }
 
   bool exists(String id) => _byId.containsKey(id);
+
+  Future<void> reloadFromStorage() async {
+    _byId.clear();
+    _visibleIds.clear();
+    _legendaryDaysYmd.clear();
+    _suggestedYmdById.clear();
+    _completedYesterdayIds.clear();
+    _box = null;
+    _metaBox = null;
+    await loadFromStorage();
+    notifyListeners();
+  }
 
   Future<void> loadFromStorage() async {
     _box = Hive.isBoxOpen(_boxName)
@@ -353,7 +361,7 @@ class MissionProvider with ChangeNotifier {
   }
 
   // ===== Internals =====
-  String _todayYmdLocal() => DateKeys.ymd(DateTime.now());
+  String _todayYmdLocal() => DateKeys.ymd(AppClock.now());
 
   void _reseatRngFor(String ymd) {
     // Include pool size to avoid degenerate repeats when the pool changes.
@@ -421,7 +429,7 @@ class MissionProvider with ChangeNotifier {
     try {
       return DateKeys.fromYmd(s);
     } catch (_) {
-      final dt = DateTime.tryParse(ymd) ?? DateTime.now();
+      final dt = DateTime.tryParse(ymd) ?? AppClock.now();
       return DateKeys.dateOnly(dt);
     }
   }
@@ -476,7 +484,7 @@ class MissionProvider with ChangeNotifier {
     int weakStatScore(Mission m) {
       int sum = 0;
       for (final sid in m.statIds) {
-        sum += (recentByStat[sid] ?? 0);
+        sum += recentByStat[sid] ?? 0;
       }
       return sum; // lower is weaker → higher priority
     }
@@ -495,7 +503,7 @@ class MissionProvider with ChangeNotifier {
       ..sort((a, b) {
         final s = weakStatScore(a).compareTo(weakStatScore(b));
         if (s != 0) return s;
-        final cd = (isCooledDown(b) ? 1 : 0) - (isCooledDown(a) ? 1 : 0);
+        final cd = isCooledDown(b) ? 1 : 0 - (isCooledDown(a) ? 1 : 0);
         if (cd != 0) return cd;
         final fr = a.timesRecommended.compareTo(b.timesRecommended);
         if (fr != 0) return fr;
@@ -654,7 +662,7 @@ class MissionProvider with ChangeNotifier {
 
     int added = 0;
 
-    Mission _pickOne(List<Mission> list) {
+    Mission pickOne(List<Mission> list) {
       list.shuffle(_rng);
       return list.first;
     }
@@ -662,11 +670,11 @@ class MissionProvider with ChangeNotifier {
     while (need > 0 && _visibleIds.length < _kVisibleSlots) {
       Mission? pick;
       if (priority.isNotEmpty) {
-        pick = _pickOne(priority);
+        pick = pickOne(priority);
         priority.remove(pick);
         others.remove(pick);
       } else if (others.isNotEmpty) {
-        pick = _pickOne(others);
+        pick = pickOne(others);
         others.remove(pick);
       } else {
         break;
@@ -751,8 +759,9 @@ class MissionProvider with ChangeNotifier {
 
               final aLeg = _isLegendary(a) ? 1 : 0;
               final bLeg = _isLegendary(b) ? 1 : 0;
-              if (aLeg != bLeg)
+              if (aLeg != bLeg) {
                 return aLeg.compareTo(bLeg); // non-legendary first
+              }
 
               final fr = a.timesRecommended.compareTo(b.timesRecommended);
               if (fr != 0) return fr;

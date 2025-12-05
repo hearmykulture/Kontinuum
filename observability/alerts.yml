@@ -1,0 +1,20 @@
+groups:
+- name: kontinuum
+  rules:
+  - alert: SyncStalled
+    expr: (time() - plaid_last_sync_timestamp_seconds) > 6*60*60
+    for: 10m
+    labels: { severity: warning }
+    annotations: { summary: "Item {{ $labels.itemId }} stale > 6h" }
+
+  - alert: WebhookErrors
+    expr: increase(plaid_webhooks_errors_total[5m]) > 0
+    for: 5m
+    labels: { severity: warning }
+    annotations: { summary: "Webhook errors detected" }
+
+  - alert: SlowSyncP95
+    expr: histogram_quantile(0.95, sum by (le) (rate(plaid_sync_duration_seconds_bucket[5m]))) > 10
+    for: 10m
+    labels: { severity: warning }
+    annotations: { summary: "P95 sync > 10s" }

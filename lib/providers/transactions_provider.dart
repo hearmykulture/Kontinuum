@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:kontinuum/models/budget_transaction.dart';
+import 'package:kontinuum/models/manual_transaction_draft.dart';
 import 'package:kontinuum/services/budget_boxes.dart';
 import 'package:kontinuum/services/transactions_repository.dart';
 import 'package:kontinuum/services/transactions_store.dart';
@@ -25,6 +26,13 @@ class TransactionsProvider extends ChangeNotifier {
 
   List<BudgetTransaction> get unreviewed =>
       TransactionsStore.unreviewedNewestFirst();
+
+  Future<BudgetTransaction> addManualTransaction(
+      ManualTransactionDraft draft) async {
+    final txn = await TransactionsStore.addManualTransaction(draft);
+    notifyListeners();
+    return txn;
+  }
 
   Future<void> refresh({required String userId, String? itemId}) async {
     _loading = true;

@@ -15,7 +15,12 @@ import 'package:kontinuum/models/stat_history_entry.dart';
 import 'package:kontinuum/models/milestone.dart';
 import 'package:kontinuum/data/milestone_seeder.dart';
 import 'package:kontinuum/data/stat_repository.dart';
+import 'package:kontinuum/core/today/today_state.dart';
+import 'package:kontinuum/core/streaks/streak_engine.dart';
+import 'package:kontinuum/core/time/day_id.dart';
+import 'package:kontinuum/utils/date_keys.dart';
 import 'package:kontinuum/providers/mission_provider.dart';
+import 'package:kontinuum/core/time/app_clock.dart';
 
 class ObjectiveProvider with ChangeNotifier {
   final Map<DateTime, List<Objective>> _objectivesByDate = {};
@@ -24,17 +29,32 @@ class ObjectiveProvider with ChangeNotifier {
   final Map<String, Stat> _stats = {};
   final Map<String, Skill> _skills = {};
   final Map<String, List<Skill>> _skillsByCategory = {};
+
+  static const List<int> _abstinenceMilestoneThresholds = <int>[
+    1,
+    3,
+    7,
+    14,
+    30,
+    60,
+    90,
+    120,
+    180,
+    365,
+    730,
+  ];
   final Uuid _uuid = const Uuid();
   final List<StatHistoryEntry> _statHistory = [];
   List<StatHistoryEntry> get statHistory => _statHistory;
   final Map<String, Milestone> _milestones = {};
+  StreakEngine? _streakEngine;
 
   final HiveService _hiveService = HiveService();
 
   final ValueNotifier<int?> levelUpNotifier = ValueNotifier(null);
   final ValueNotifier<Category?> categoryLevelUpNotifier = ValueNotifier(null);
   final ValueNotifier<DateTime> selectedDateNotifier = ValueNotifier(
-    DateTime.now(),
+    AppClock.now(),
   );
 
   static const List<String> coreCategoryIds = [
@@ -60,6 +80,12 @@ class ObjectiveProvider with ChangeNotifier {
     }
     _init();
   }
+
+  void attachStreakEngine(StreakEngine engine) {
+    _streakEngine = engine;
+  }
+
+  StreakEngine? get streakEngine => _streakEngine;
 
   // ---------- Small getters ----------
   List<Objective> get staticObjectives => List.unmodifiable(_staticObjectives);
@@ -103,6 +129,65 @@ class ObjectiveProvider with ChangeNotifier {
     return completed / objectives.length;
   }
 
+  TodayState getTodayState(DateTime date) {
+    final normalized = _normalize(date);
+    final todaysObjectives = getObjectivesForDay(normalized);
+    final unlocked = todaysObjectives.where((o) => !o.isLocked).toList();
+    final completed = unlocked.where((o) => o.isCompleted).toList();
+    final rawMinutes = completed.fold<int>(0, (sum, o) => sum + o.xpReward);
+
+    return TodayState(
+      ymd: ymd(normalized),
+      activeObjectives: unlocked.length,
+      completedObjectives: completed.length,
+      rawMinutes: rawMinutes,
+    );
+  }
+
+  List<DateTime> getAllTrackedDates() {
+    final set = <DateTime>{};
+    for (final key in _objectivesByDate.keys) {
+      set.add(_normalize(key));
+    }
+    final list = set.toList()..sort();
+    return list;
+  }
+
+  List<DateTime> getCompletedDatesForObjective(String objectiveId) {
+    final base = _findBaseObjective(objectiveId);
+    if (base != null && base.isAbstinence) {
+      return _computeAbstinenceCompletionDays(base);
+    }
+
+    final set = <DateTime>{};
+    _objectivesByDate.forEach((day, list) {
+      for (final obj in list) {
+        if (obj.id != objectiveId) continue;
+        if (_isObjectiveCompleteOnDate(obj, day)) {
+          set.add(_normalize(day));
+        }
+      }
+    });
+
+    final result = set.toList()..sort();
+    return result;
+  }
+
+  bool isObjectiveCompletedOnDate(String objectiveId, DateTime date) {
+    final normalized = _normalize(date);
+    final instance = _findObjectiveForDate(objectiveId, normalized);
+    if (instance != null) {
+      return _isObjectiveCompleteOnDate(instance, normalized);
+    }
+
+    final base = _findBaseObjective(objectiveId);
+    if (base != null && base.isAbstinence) {
+      return base.abstinenceDaysOn(normalized) > 0 &&
+          !base.isRelapseOn(normalized);
+    }
+    return false;
+  }
+
   void addObjective({
     required String title,
     required ObjectiveType type,
@@ -119,8 +204,19 @@ class ObjectiveProvider with ChangeNotifier {
     bool isStatic = false,
     int? repeatEveryNDays,
     DateTime? repeatAnchorDate,
+    bool abstinenceEnabled = false,
+    DateTime? abstinenceStartDate,
   }) {
     final id = _uuid.v4();
+    final DateTime? normalizedStartDate =
+        startDate != null ? DateKeys.dateOnly(startDate) : null;
+    final DateTime? normalizedAbstinenceStart = abstinenceEnabled
+        ? DateKeys.dateOnly(
+            abstinenceStartDate ?? normalizedStartDate ?? AppClock.now(),
+          )
+        : (abstinenceStartDate != null
+            ? DateKeys.dateOnly(abstinenceStartDate)
+            : null);
     final objective = Objective(
       id: id,
       title: title,
@@ -136,12 +232,14 @@ class ObjectiveProvider with ChangeNotifier {
       writingBlockId: writingBlockId,
       repeatEveryNDays: repeatEveryNDays,
       repeatAnchorDate: repeatAnchorDate,
+      abstinenceEnabled: abstinenceEnabled,
+      abstinenceStartDate: normalizedAbstinenceStart,
     );
 
     if (isStatic) {
       _staticObjectives.add(objective);
     } else {
-      final date = _normalize(startDate ?? DateTime.now());
+      final date = _normalize(startDate ?? AppClock.now());
       _objectivesByDate.putIfAbsent(date, () => []);
       _objectivesByDate[date]!.add(objective);
     }
@@ -152,11 +250,12 @@ class ObjectiveProvider with ChangeNotifier {
 
   void toggleObjectiveCompletion(DateTime date, String objectiveId) {
     _previousStats = Map.fromEntries(
-      _stats.entries.map((e) => MapEntry(e.key, e.value.count)),
+      _stats.entries.map((e) => MapEntry(e.key, e.value.xp)),
     );
 
     final normalized = _normalize(date);
     final dateList = _objectivesByDate.putIfAbsent(normalized, () => []);
+    final engine = _streakEngine;
 
     Objective? obj = dateList.firstWhere(
       (o) => o.id == objectiveId,
@@ -206,7 +305,7 @@ class ObjectiveProvider with ChangeNotifier {
             _statHistory.add(
               StatHistoryEntry(
                 statId: stat.id,
-                date: DateTime.now(),
+                date: AppClock.now(),
                 amount: -obj.targetAmount,
                 skillId: skill.id,
               ),
@@ -214,11 +313,13 @@ class ObjectiveProvider with ChangeNotifier {
           }
         }
       }
+      engine?.handleUndoCompletion(obj.id, this);
+      _maybeUpdateCategoryStreaks(normalized, obj);
     } else {
       // Toggle to COMPLETE — ensure at least target
       obj.isCompleted = true;
       obj.completedAmount = math.max(obj.completedAmount, obj.targetAmount);
-      obj.completedOn = DateTime.now();
+      obj.completedOn = AppClock.now();
 
       for (final catId in obj.categoryIds) {
         final cat = _categories.putIfAbsent(
@@ -260,7 +361,7 @@ class ObjectiveProvider with ChangeNotifier {
             _statHistory.add(
               StatHistoryEntry(
                 statId: stat.id,
-                date: DateTime.now(),
+                date: AppClock.now(),
                 amount: obj.targetAmount,
                 skillId: skill.id,
               ),
@@ -277,6 +378,8 @@ class ObjectiveProvider with ChangeNotifier {
           }
         }
       }
+      engine?.recordCompletionAndMaybeBonus(obj, normalized, this);
+      _maybeUpdateCategoryStreaks(normalized, obj);
     }
 
     final newTotalXp = totalXp;
@@ -435,6 +538,82 @@ class ObjectiveProvider with ChangeNotifier {
     return map;
   }
 
+  void debugCompleteAllOnDate(DateTime date) {
+    final list = getObjectivesForDay(date);
+    for (final obj in list) {
+      if (!obj.isCompleted) {
+        toggleObjectiveCompletion(date, obj.id);
+      }
+    }
+  }
+
+  void debugUncompleteAllOnDate(DateTime date) {
+    final list = getObjectivesForDay(date);
+    for (final obj in list) {
+      if (obj.isCompleted) {
+        toggleObjectiveCompletion(date, obj.id);
+      }
+    }
+  }
+
+  int getAbstinenceDays(String objectiveId, DateTime date) {
+    final base = _findBaseObjective(objectiveId);
+    if (base == null || !base.isAbstinence) return 0;
+    return base.abstinenceDaysOn(date);
+  }
+
+  String ensureAbstinenceMilestoneStat(Objective objective, int currentDays) {
+    final String statId = 'abstinence_${objective.id}';
+    _milestones.putIfAbsent(
+      statId,
+      () => Milestone(
+        statId: statId,
+        thresholds: _abstinenceMilestoneThresholds,
+      ),
+    );
+
+    final stat = _stats.putIfAbsent(
+      statId,
+      () => Stat(
+        id: statId,
+        label: '${objective.title} streak',
+        averageMinutesPerUnit: 1,
+        repsForMastery: 1,
+      ),
+    );
+
+    stat.count = currentDays;
+    stat.xp = currentDays;
+    return statId;
+  }
+
+  Future<void> startAbstinence(String objectiveId, DateTime date) async {
+    final base = _findBaseObjective(objectiveId);
+    if (base == null) return;
+
+    final normalized = DateKeys.dateOnly(date);
+    base.abstinenceEnabled = true;
+    base.abstinenceStartDate = normalized;
+    base.abstinenceLastRelapseDate = null;
+    base.abstinenceCurrentStreakDays = 0;
+    base.abstinenceRelapsesByDate.clear();
+
+    await persistObjectives();
+    notifyListeners();
+  }
+
+  Future<void> logAbstinenceRelapse(
+    String objectiveId,
+    DateTime date,
+  ) async {
+    final base = _findBaseObjective(objectiveId);
+    if (base == null || !base.abstinenceEnabled) return;
+
+    base.markRelapseOn(date);
+    await persistObjectives();
+    notifyListeners();
+  }
+
   void resetAllXp({bool suppressNotify = false}) {
     for (final cat in _categories.values) {
       cat.xp = 0;
@@ -472,6 +651,11 @@ class ObjectiveProvider with ChangeNotifier {
     _skillsByCategory.putIfAbsent(categoryId, () => []).add(skill);
 
     for (final stat in skill.stats) {
+      // Ensure stats inherit their parent skill's weight so their XP caps scale
+      // proportionally with the skill/category share instead of falling back to
+      // the legacy minutes-based curve. This keeps early levels consistent with
+      // the eased XP experience we expose everywhere else.
+      stat.parentSkillWeight = skill.weight;
       registerStat(stat);
     }
     notifyListeners();
@@ -535,6 +719,32 @@ class ObjectiveProvider with ChangeNotifier {
     if (_staticObjectives.isEmpty) {
       addStaticObjectives();
     }
+  }
+
+  void _resetInMemoryState() {
+    _objectivesByDate.clear();
+    _staticObjectives.clear();
+    _stats.clear();
+    _skills.clear();
+    _skillsByCategory.clear();
+    _statHistory.clear();
+    _milestones.clear();
+    _previousStats.clear();
+    _lastCategoryLevelsNotified.clear();
+    _lastTotalLevelNotified = null;
+    levelUpNotifier.value = null;
+    categoryLevelUpNotifier.value = null;
+
+    _categories.clear();
+    for (final id in coreCategoryIds) {
+      _categories[id] = Category(id: id, name: id);
+    }
+  }
+
+  Future<void> reloadFromStorage() async {
+    _resetInMemoryState();
+    await _init();
+    notifyListeners();
   }
 
   Future<void> persistObjectives() async {
@@ -648,18 +858,22 @@ class ObjectiveProvider with ChangeNotifier {
 
     final skills = _skillsByCategory[categoryId] ?? const <Skill>[];
     for (final skill in skills) {
-      for (final s in skill.stats) addIfNew(s);
+      for (final s in skill.stats) {
+        addIfNew(s);
+      }
     }
 
     for (final s in _stats.values) {
       final meta = StatRepository.getById(s.id);
-      if (meta != null && meta.categoryId == categoryId) addIfNew(s);
+      if (meta != null && meta.categoryId == categoryId) {
+        addIfNew(s);
+      }
     }
     return out;
   }
 
   Map<String, int> getStatXpForTimeframe(String timeframe) {
-    final now = DateTime.now();
+    final now = AppClock.now();
 
     DateTime? cutoff;
     if (timeframe == 'Last 7 Days') {
@@ -675,7 +889,7 @@ class ObjectiveProvider with ChangeNotifier {
     final result = <String, int>{};
     for (final entry in _statHistory) {
       if (cutoff == null || entry.date.isAfter(cutoff)) {
-        result[entry.statId] = (result[entry.statId] ?? 0) + entry.amount;
+        result[entry.statId] = result[entry.statId] ?? 0) + entry.amount;
       }
     }
     return result;
@@ -687,7 +901,7 @@ class ObjectiveProvider with ChangeNotifier {
     final deltaMap = <String, int>{};
     for (final entry in _statHistory) {
       if (entry.date.isAfter(start)) {
-        deltaMap[entry.statId] = (deltaMap[entry.statId] ?? 0) + entry.amount;
+        deltaMap[entry.statId] = deltaMap[entry.statId] ?? 0) + entry.amount;
       }
     }
     return deltaMap;
@@ -707,7 +921,7 @@ class ObjectiveProvider with ChangeNotifier {
   }
 
   DateTime? _getTimeframeCutoff(String timeframe) {
-    final now = DateTime.now();
+    final now = AppClock.now();
 
     if (timeframe == 'Last 7 Days') {
       return now.subtract(const Duration(days: 7));
@@ -800,7 +1014,7 @@ class ObjectiveProvider with ChangeNotifier {
           _statHistory.add(
             StatHistoryEntry(
               statId: stat.id,
-              date: DateTime.now(),
+              date: AppClock.now(),
               amount: unitDelta,
               skillId: skill.id,
             ),
@@ -857,7 +1071,7 @@ class ObjectiveProvider with ChangeNotifier {
         final bool nowCompleted = finalAmount >= obj.targetAmount;
         obj.isCompleted = nowCompleted;
         obj.completedOn =
-            nowCompleted ? (obj.completedOn ?? DateTime.now()) : null;
+            nowCompleted ? (obj.completedOn ?? AppClock.now()) : null;
 
         evaluateLocks(normalized);
         notifyListeners();
@@ -880,7 +1094,7 @@ class ObjectiveProvider with ChangeNotifier {
       final bool nowCompleted = finalAmount >= obj.targetAmount;
       obj.isCompleted = nowCompleted;
       obj.completedOn =
-          nowCompleted ? (obj.completedOn ?? DateTime.now()) : null;
+          nowCompleted ? (obj.completedOn ?? AppClock.now()) : null;
 
       _applyTallyDelta(obj: obj, xpDelta: xpDelta, unitDelta: unitDelta);
 
@@ -962,13 +1176,13 @@ class ObjectiveProvider with ChangeNotifier {
 
     final beforeStatic = _staticObjectives.length;
     _staticObjectives.removeWhere((o) => o.id == objectiveId);
-    removed += (beforeStatic - _staticObjectives.length);
+    removed += beforeStatic - _staticObjectives.length;
 
     for (final entry in _objectivesByDate.entries.toList()) {
       final list = entry.value;
       final before = list.length;
       list.removeWhere((o) => o.id == objectiveId);
-      removed += (before - list.length);
+      removed += before - list.length;
       if (list.isEmpty) _objectivesByDate.remove(entry.key);
     }
 
@@ -1133,5 +1347,74 @@ class ObjectiveProvider with ChangeNotifier {
 
     await _hiveService.saveCategories(_categories);
     notifyListeners();
+  }
+
+  Objective? _findBaseObjective(String objectiveId) {
+    for (final obj in _staticObjectives) {
+      if (obj.id == objectiveId) return obj;
+    }
+    for (final list in _objectivesByDate.values) {
+      for (final obj in list) {
+        if (obj.id == objectiveId) return obj;
+      }
+    }
+    return null;
+  }
+
+  Objective? _findObjectiveForDate(String objectiveId, DateTime date) {
+    final normalized = _normalize(date);
+    final list = _objectivesByDate[normalized];
+    if (list == null) return null;
+    for (final obj in list) {
+      if (obj.id == objectiveId) return obj;
+    }
+    return null;
+  }
+
+  List<DateTime> _computeAbstinenceCompletionDays(Objective obj) {
+    final start = obj.abstinenceStartDate;
+    if (start == null) return const <DateTime>[];
+
+    final today = DateKeys.dateOnly(AppClock.now());
+    final out = <DateTime>[];
+    DateTime cursor = DateKeys.dateOnly(start);
+    while (!cursor.isAfter(today)) {
+      if (!obj.isRelapseOn(cursor)) {
+        out.add(cursor);
+      }
+      cursor = cursor.add(const Duration(days: 1));
+    }
+    return out;
+  }
+
+  bool _isObjectiveCompleteOnDate(Objective obj, DateTime date) {
+    if (obj.isAbstinence) {
+      return obj.abstinenceDaysOn(date) > 0 && !obj.isRelapseOn(date);
+    }
+    if (obj.type == ObjectiveType.tally || obj.type == ObjectiveType.stopwatch) {
+      final amount = obj.getCompletedAmount(date);
+      return amount >= obj.targetAmount || obj.isCompleted;
+    }
+    return obj.isCompleted;
+  }
+
+  void _maybeUpdateCategoryStreaks(DateTime date, Objective changed) {
+    final engine = _streakEngine;
+    if (engine == null) return;
+    if (changed.categoryIds.isEmpty) return;
+
+    final normalized = _normalize(date);
+    final todays = getObjectivesForDay(normalized);
+    for (final catId in changed.categoryIds) {
+      final members =
+          todays.where((o) => o.categoryIds.contains(catId)).toList();
+      if (members.isEmpty) continue;
+      final allDone = members.every((o) => o.isCompleted);
+      if (allDone) {
+        engine.onCategoryAllDoneToday(catId, normalized);
+      } else {
+        engine.cancelCategoryClaimForTodayIfAny(catId, normalized);
+      }
+    }
   }
 }
