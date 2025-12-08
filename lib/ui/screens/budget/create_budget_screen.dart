@@ -14,6 +14,7 @@ import 'sheets/recurring_creator_sheet.dart';
 import 'theme/budget_theme.dart';
 import 'widgets/amount_picker_card.dart';
 import 'widgets/common_widgets.dart';
+import 'widgets/budget_cadence_selector.dart';
 
 class CreateBudgetScreen extends StatefulWidget {
   const CreateBudgetScreen({
@@ -157,6 +158,16 @@ class _CreateBudgetScreenState extends State<CreateBudgetScreen>
         setState(() => _pillSize = newSize);
       }
     });
+  }
+
+  Widget _buildCadenceSelector() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: BudgetCadenceSelector(
+        selected: _ctrl.cadence,
+        onChanged: _ctrl.setCadence,
+      ),
+    );
   }
 
   void _handleCloseTap() {
@@ -567,7 +578,8 @@ class _CreateBudgetScreenState extends State<CreateBudgetScreen>
                                                   painter: RingPainter(
                                                     sweepRadians: sweep,
                                                     trackColor: Colors.white
-                                                        .withValues(alpha: 0.10),
+                                                        .withValues(
+                                                            alpha: 0.10),
                                                     ringColor: BudgetTheme.mint,
                                                     stroke: _ringStroke,
                                                     cap: StrokeCap.round,
@@ -617,7 +629,8 @@ class _CreateBudgetScreenState extends State<CreateBudgetScreen>
                                                     splitT: _divide.value,
                                                     stroke: _ringStroke,
                                                     trackColor: Colors.white
-                                                        .withValues(alpha: 0.10),
+                                                        .withValues(
+                                                            alpha: 0.10),
                                                     gapRadians: 0.018,
                                                   ),
                                                 );
@@ -659,8 +672,7 @@ class _CreateBudgetScreenState extends State<CreateBudgetScreen>
                                             icon: Icons.payments_rounded,
                                             label: _ctrl.monthlyAmount == null
                                                 ? 'Set amount'
-                                                : _currencyFmt.format(
-                                                    _ctrl.monthlyAmount),
+                                                : '${_currencyFmt.format(_ctrl.monthlyAmount)} / ${labelForBudgetTimeSpan(_ctrl.cadence).toLowerCase()}',
                                             onTap: _openAmountPicker,
                                           ),
                                         ),
@@ -671,6 +683,8 @@ class _CreateBudgetScreenState extends State<CreateBudgetScreen>
                               ),
                             ),
                           ),
+
+                          _buildCadenceSelector(),
 
                           // Over budget warning
                           AnimatedSwitcher(

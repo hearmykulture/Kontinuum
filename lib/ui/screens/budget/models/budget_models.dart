@@ -9,6 +9,7 @@ class BudgetDraft {
     required this.categories,
     required this.recurrings,
     required this.unallocatedAsSavings,
+    this.cadence = BudgetTimeSpan.monthly,
   });
 
   final String title;
@@ -16,6 +17,7 @@ class BudgetDraft {
   final List<BudgetCategory> categories;
   final List<RecurringExpense> recurrings;
   final bool unallocatedAsSavings;
+  final BudgetTimeSpan cadence;
 
   BudgetDraft copyWith({
     String? title,
@@ -23,6 +25,7 @@ class BudgetDraft {
     List<BudgetCategory>? categories,
     List<RecurringExpense>? recurrings,
     bool? unallocatedAsSavings,
+    BudgetTimeSpan? cadence,
   }) {
     return BudgetDraft(
       title: title ?? this.title,
@@ -30,6 +33,7 @@ class BudgetDraft {
       categories: categories ?? this.categories,
       recurrings: recurrings ?? this.recurrings,
       unallocatedAsSavings: unallocatedAsSavings ?? this.unallocatedAsSavings,
+      cadence: cadence ?? this.cadence,
     );
   }
 }
@@ -52,6 +56,19 @@ class BudgetCategory {
 enum Recurrence { weekly, monthly, yearly }
 
 enum BudgetTimeSpan { weekly, monthly, yearly, custom }
+
+String labelForBudgetTimeSpan(BudgetTimeSpan span) {
+  switch (span) {
+    case BudgetTimeSpan.weekly:
+      return 'Weekly';
+    case BudgetTimeSpan.monthly:
+      return 'Monthly';
+    case BudgetTimeSpan.yearly:
+      return 'Yearly';
+    case BudgetTimeSpan.custom:
+      return 'Custom';
+  }
+}
 
 class RecurringExpense {
   RecurringExpense({

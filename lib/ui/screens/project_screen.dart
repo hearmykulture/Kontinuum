@@ -1,8 +1,14 @@
 import 'package:flutter/material.dart';
-import 'package:kontinuum/ui/writing_editor/block_text_editor.dart';
 
 class ProjectScreen extends StatefulWidget {
-  const ProjectScreen({super.key});
+  const ProjectScreen({
+    super.key,
+    this.projectId,
+    this.heroTag = 'create_project_card',
+  });
+
+  final String? projectId;
+  final String heroTag;
 
   @override
   State<ProjectScreen> createState() => _ProjectScreenState();
@@ -64,10 +70,10 @@ class _ProjectScreenState extends State<ProjectScreen>
   }
 
   void _openEditorForTrack(int index) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => const BlockTextEditor(),
-        settings: RouteSettings(name: 'editor_track_${index + 1}'),
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Opening editor for ${_tracks[index]}'),
+        duration: const Duration(seconds: 2),
       ),
     );
   }

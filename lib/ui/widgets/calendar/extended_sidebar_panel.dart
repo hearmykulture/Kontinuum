@@ -27,6 +27,7 @@ class ExtendedSidebarPanel extends StatelessWidget {
   // Style tokens
   static const _bg = Color(0xFF000000); // ← exact #19212E
   static const _rose = Color(0xFFE54878); // header + outline tint
+  static const _taskRing = Color(0xFF47C7FF); // tasks/reminders ring
   static const _muted = Color(0x99FFFFFF);
 
   // Layout tokens
@@ -318,23 +319,40 @@ class ExtendedSidebarPanel extends StatelessWidget {
                                   false;
 
                               BoxDecoration? deco;
+                              Color? fillColor;
+                              BorderSide? borderSide;
+                              Color textColor =
+                                  inMonth ? Colors.white : Colors.white38;
+
+                              if (isSel) {
+                                fillColor = _rose;
+                                textColor = Colors.black;
+                              }
+
                               if (isToday) {
-                                deco = BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: Colors.white,
-                                    width: 2.0,
-                                  ),
+                                borderSide = const BorderSide(
+                                  color: Colors.white,
+                                  width: 2.0,
                                 );
                               } else if (hasItems) {
-                                deco = BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(color: _rose, width: 2.0),
+                                borderSide = BorderSide(
+                                  color: _taskRing,
+                                  width: 2.0,
                                 );
                               }
 
-                              final textColor =
-                                  inMonth ? Colors.white : Colors.white38;
+                              if (fillColor != null || borderSide != null) {
+                                deco = BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: fillColor,
+                                  border: borderSide != null
+                                      ? Border.all(
+                                          color: borderSide.color,
+                                          width: borderSide.width,
+                                        )
+                                      : null,
+                                );
+                              }
 
                               return Opacity(
                                 opacity: enabled ? 1 : 0.35,
@@ -528,55 +546,6 @@ class ExtendedSidebarPanel extends StatelessWidget {
                       ),
 
                       const Spacer(),
-
-                      // 3-dot round button (pinned left)
-                      Align(
-                        alignment: Alignment.bottomLeft,
-                        child: Container(
-                          width: 56,
-                          height: 56,
-                          decoration: const BoxDecoration(
-                            color: Color(0xFF0E0E0E),
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: Color(0x33000000),
-                                blurRadius: 8,
-                                offset: Offset(0, 3),
-                              ),
-                            ],
-                          ),
-                          child: Center(
-                            child: Container(
-                              width: 26,
-                              height: 14,
-                              decoration: BoxDecoration(
-                                color: Colors.white10,
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 3,
-                              ),
-                              child: Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: List.generate(
-                                  3,
-                                  (_) => Container(
-                                    width: 4,
-                                    height: 4,
-                                    decoration: const BoxDecoration(
-                                      color: Colors.white,
-                                      shape: BoxShape.circle,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
                     ],
                   ),
                 ),

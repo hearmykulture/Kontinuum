@@ -62,6 +62,17 @@ class WorkoutSessionStateAdapter extends TypeAdapter<WorkoutSessionState> {
     final fields = <int, dynamic>{
       for (int i = 0; i < numOfFields; i++) reader.readByte(): reader.read(),
     };
+    final Map<String, List<SavedSetData>> exerciseSets = {};
+    if (fields.containsKey(17)) {
+      final raw = fields[17];
+      if (raw is Map) {
+        raw.forEach((key, value) {
+          if (key is String && value is List) {
+            exerciseSets[key] = value.cast<SavedSetData>();
+          }
+        });
+      }
+    }
     return WorkoutSessionState(
       workoutId: fields[0] as String,
       routineId: fields[1] as String?,
@@ -80,13 +91,14 @@ class WorkoutSessionStateAdapter extends TypeAdapter<WorkoutSessionState> {
       finalRestStarted: fields[14] as bool?,
       finalRestDone: fields[15] as bool?,
       scheduledDateIso: fields[16] as String?,
+      exerciseSets: exerciseSets,
     );
   }
 
   @override
   void write(BinaryWriter writer, WorkoutSessionState obj) {
     writer
-      ..writeByte(17)
+      ..writeByte(18)
       ..writeByte(0)
       ..write(obj.workoutId)
       ..writeByte(1)
@@ -120,7 +132,9 @@ class WorkoutSessionStateAdapter extends TypeAdapter<WorkoutSessionState> {
       ..writeByte(15)
       ..write(obj.finalRestDone)
       ..writeByte(16)
-      ..write(obj.scheduledDateIso);
+      ..write(obj.scheduledDateIso)
+      ..writeByte(17)
+      ..write(obj.exerciseSets);
   }
 
   @override

@@ -167,7 +167,7 @@ class _CreateTile extends StatelessWidget {
           borderRadius: BorderRadius.circular(16),
           onTap: () {
             Navigator.of(context).push(
-              PageRouteBuilder(
+              PageRouteBuilder<void>(
                 transitionDuration: const Duration(milliseconds: 420),
                 reverseTransitionDuration: const Duration(milliseconds: 300),
                 pageBuilder: (_, __, ___) => const screens.ProjectScreen(
@@ -217,7 +217,7 @@ class _ProjectCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(16),
           onTap: () {
             Navigator.of(context).push(
-              PageRouteBuilder(
+              PageRouteBuilder<void>(
                 transitionDuration: const Duration(milliseconds: 420),
                 reverseTransitionDuration: const Duration(milliseconds: 300),
                 pageBuilder: (_, __, ___) =>
@@ -307,10 +307,10 @@ class _CreateCenteredBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
+    return const Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
-        children: const [
+        children: [
           Icon(Icons.add_rounded, color: Colors.white70, size: 22),
           SizedBox(height: 8),
           Text('Create', style: TextStyle(color: Colors.white, fontSize: 13)),

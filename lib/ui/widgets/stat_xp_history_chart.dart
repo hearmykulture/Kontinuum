@@ -19,16 +19,17 @@ class StatXpHistoryChart extends StatelessWidget {
       );
     }
 
+    double _xpValue(StatHistoryEntry e) =>
+        e.xpDelta != 0 ? e.xpDelta.toDouble() : e.amount.toDouble();
+
     final spots = <FlSpot>[];
     for (int i = 0; i < history.length; i++) {
-      spots.add(FlSpot(i.toDouble(), history[i].amount.toDouble()));
+      spots.add(FlSpot(i.toDouble(), _xpValue(history[i])));
     }
 
-    final maxY =
-        history
-            .map((e) => e.amount)
-            .reduce((a, b) => a > b ? a : b)
-            .toDouble() *
+    final maxY = history
+            .map((e) => _xpValue(e))
+            .fold<double>(0, (a, b) => a > b ? a : b) *
         1.2;
 
     return Padding(

@@ -2027,6 +2027,17 @@ class _WorkoutAlignmentView extends StatelessWidget {
     );
   }
 
+  void _showSessionStartError(
+    BuildContext context,
+    SessionStartResult result,
+  ) {
+    final message =
+        result.message ?? 'Unable to start this workout session right now.';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
   Future<void> _launchWorkout(
     BuildContext context,
     String routineId,
@@ -2036,11 +2047,16 @@ class _WorkoutAlignmentView extends StatelessWidget {
     final wp = context.read<WorkoutProvider>();
     final bool alreadyActive = wp.activeDraft?.workoutId == workout.id;
     if (!alreadyActive) {
-      wp.startSession(
+      final result = wp.startSession(
         routineId: routineId,
         workoutId: workout.id,
         source: 'alignment_flow',
+        calendarDayOverride: scheduled,
       );
+      if (!result.started) {
+        _showSessionStartError(context, result);
+        return;
+      }
     }
 
     final args = SessionScreenArgs(

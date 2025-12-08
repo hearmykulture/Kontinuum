@@ -10,11 +10,9 @@ ObjectiveTypeHandler getHandlerForType(ObjectiveType type) {
       return TallyObjectiveHandler();
     case ObjectiveType.stopwatch:
       return StopwatchObjectiveHandler();
-    case ObjectiveType.writingPrompt:
-      return WritingPromptObjectiveHandler(); // ✅ fixed name
     case ObjectiveType.subtask:
-      return SubtaskObjectiveHandler(); // ✅ fixed name
-    case ObjectiveType.reflective:
-      return ReflectiveObjectiveHandler(); // ✅ fixed name
+      return SubtaskObjectiveHandler();
+    case ObjectiveType.abstinence:
+      return StandardObjectiveHandler(); // Use standard handler for abstinence
   }
 }

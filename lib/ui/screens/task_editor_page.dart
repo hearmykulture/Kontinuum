@@ -1,7 +1,7 @@
 // lib/ui/screens/task_editor_page.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/foundation.dart';
+import 'package:kontinuum/ui/widgets/corner_icons.dart';
 import 'task_editor/models.dart';
 import 'task_editor/checklist.dart';
 import 'task_editor/panels_and_calendar.dart';
@@ -128,6 +128,7 @@ class _TaskEditorPageState extends State<TaskEditorPage> {
         hasDeadline: v.hasDeadline,
         checklist: list,
         date: v.someday ? null : v.date,
+        deadline: v.deadline,
         someday: v.someday,
         // ✅ keep all selected stats
         stats: List<StatPick>.from(v.stats),
@@ -195,34 +196,17 @@ class _TaskEditorPageState extends State<TaskEditorPage> {
 
                   return Stack(
                     children: [
-                      // Top-right Close / Delete row
-                      Positioned(
+                      // Corner icons (delete + close)
+                      CornerIcons(
                         top: 0,
-                        right: 0,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (widget.showDelete)
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.delete_outline,
-                                  color: Colors.white,
-                                  size: 24,
-                                ),
-                                tooltip: 'Delete',
-                                onPressed: widget.onDelete,
-                              ),
-                            IconButton(
-                              icon: const Icon(
-                                Icons.close_rounded,
-                                color: Colors.white,
-                                size: 28,
-                              ),
-                              tooltip: 'Close',
-                              onPressed: _close,
-                            ),
-                          ],
-                        ),
+                        leftIcon:
+                            widget.showDelete ? Icons.delete_outline : null,
+                        onLeftPressed:
+                            widget.showDelete ? widget.onDelete : null,
+                        leftTooltip: 'Delete',
+                        rightIcon: Icons.close,
+                        onRightPressed: _close,
+                        rightTooltip: 'Close',
                       ),
 
                       // Centered title caret

@@ -7,6 +7,9 @@ import 'package:kontinuum/models/workout_models.dart';
 import 'package:kontinuum/providers/workout_provider.dart';
 import 'package:kontinuum/core/analytics/analytics_events.dart';
 import 'package:kontinuum/services/analytics_service.dart';
+import 'package:kontinuum/core/time/app_clock.dart';
+import 'package:kontinuum/ui/workout/workout_editor_widgets.dart'
+    show SchedulePatternConfig, SchedulePatternPicker, SchedulePatternMode;
 
 const _kRoutineBg = Color(0xFF090A0E);
 const _kFooterH = 44;
@@ -15,11 +18,13 @@ const int _kMaxTitleChars = 48;
 class WorkoutRoutineEditorPage extends StatefulWidget {
   const WorkoutRoutineEditorPage({
     super.key,
+    this.routineId,
     this.onRequestClose,
     this.onSaved,
     this.closeTopOverride,
   });
 
+  final String? routineId;
   final VoidCallback? onRequestClose;
   final ValueChanged<String>? onSaved;
   final double? closeTopOverride;
@@ -38,10 +43,14 @@ class _WorkoutRoutineEditorPageState extends State<WorkoutRoutineEditorPage> {
   int _kcal = 2100;
   int _protein = 180;
   bool _poEnabled = true;
+  SchedulePatternConfig _restConfig =
+      const SchedulePatternConfig.weekly(<int>{}); // start empty
   bool _saving = false;
   bool _showContent = false;
 
   double _titleFontSize = 44;
+
+  String? _intervalStartIso;
 
   bool get _embedded => widget.onRequestClose != null;
   bool get _showInlineClose => !_embedded;
@@ -72,15 +81,34 @@ class _WorkoutRoutineEditorPageState extends State<WorkoutRoutineEditorPage> {
       strictness: _strict,
     );
 
-    final routine = await wp.createRoutine(
+    final restSchedule = _buildRestSchedule(_restConfig);
+
+    Routine? routine;
+    if (widget.routineId != null) {
+      routine = wp.getRoutineById(widget.routineId!);
+      if (routine != null) {
+        routine
+          ..name = name
+          ..poEnabled = _poEnabled
+          ..diet = diet
+          ..restSchedule = restSchedule
+          ..scheduleMode = restSchedule.mode;
+        await wp.updateRoutine(routine);
+      }
+    }
+
+    routine ??= await wp.createRoutine(
       name: name,
       diet: diet,
       poEnabled: _poEnabled,
+      restSchedule: restSchedule,
+      scheduleMode: restSchedule.mode,
     );
 
+    final bool created = widget.routineId == null || routine.id != widget.routineId;
     AnalyticsService.instance.log(
       WorkoutAnalyticsEvents.routineOpened,
-      {'routineId': routine.id, 'created': true},
+      {'routineId': routine.id, 'created': created},
     );
 
     if (widget.onSaved != null) {
@@ -118,6 +146,12 @@ class _WorkoutRoutineEditorPageState extends State<WorkoutRoutineEditorPage> {
       _recalcTitleSize(_titleCtrl.text);
     });
 
+    // Hydrate if editing an existing routine.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _maybeLoadRoutine();
+    });
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _titleFocus.requestFocus();
@@ -134,6 +168,74 @@ class _WorkoutRoutineEditorPageState extends State<WorkoutRoutineEditorPage> {
     _titleCtrl.dispose();
     _titleFocus.dispose();
     super.dispose();
+  }
+
+  RestSchedule _buildRestSchedule(SchedulePatternConfig cfg) {
+    if (cfg.mode == SchedulePatternMode.interval) {
+      final int every = cfg.intervalDays <= 0 ? 1 : cfg.intervalDays;
+      _intervalStartIso ??= AppClock.now().toIso8601String();
+      return RestSchedule(
+        mode: RepetitionMode.interval,
+        weeklyDays: List<bool>.filled(7, false),
+        intervalValue: every,
+        intervalUnit: RepetitionUnit.days,
+        intervalStartDateIso: _intervalStartIso,
+      );
+    }
+
+    final weekly = List<bool>.generate(
+      7,
+      (i) => cfg.weeklyDays.contains(i + 1),
+    );
+
+    return RestSchedule(
+      mode: RepetitionMode.weekly,
+      weeklyDays: weekly,
+      intervalValue: 1,
+      intervalUnit: RepetitionUnit.days,
+    );
+  }
+
+  void _maybeLoadRoutine() {
+    if (widget.routineId == null) return;
+    final wp = context.read<WorkoutProvider>();
+    final Routine? routine = wp.getRoutineById(widget.routineId!);
+    if (routine == null) return;
+
+    setState(() {
+      _titleCtrl.text = routine.name;
+      _goal = routine.diet.goal;
+      _strict = routine.diet.strictness;
+      _kcal = routine.diet.kcalPerDay;
+      _protein = routine.diet.proteinTargetG;
+      _poEnabled = routine.poEnabled;
+      _restConfig = _configFromRest(routine.restSchedule, routine.scheduleMode);
+      _intervalStartIso = routine.restSchedule?.intervalStartDateIso;
+      _recalcTitleSize(_titleCtrl.text);
+    });
+  }
+
+  SchedulePatternConfig _configFromRest(
+    RestSchedule? rest,
+    RepetitionMode scheduleMode,
+  ) {
+    if (rest == null) {
+      return SchedulePatternConfig.weekly(<int>{});
+    }
+
+    if (rest.mode == RepetitionMode.interval ||
+        scheduleMode == RepetitionMode.interval) {
+      final int every = rest.intervalValue <= 0 ? 1 : rest.intervalValue;
+      return SchedulePatternConfig.interval(every);
+    }
+
+    final Set<int> days = <int>{};
+    for (int i = 0; i < rest.weeklyDays.length; i++) {
+      if (rest.weeklyDays[i]) {
+        days.add(i + 1); // 1=Mon … 7=Sun
+      }
+    }
+    return SchedulePatternConfig.weekly(days);
   }
 
   @override
@@ -241,6 +343,23 @@ class _WorkoutRoutineEditorPageState extends State<WorkoutRoutineEditorPage> {
                                         setState(() => _protein = p),
                                     onPoChanged: (v) =>
                                         setState(() => _poEnabled = v),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  SchedulePatternPicker(
+                                    title: 'Rest days',
+                                    subtitle:
+                                        'Used for reminders and dashboards.',
+                                    value: _restConfig,
+                                    minIntervalDays: 1,
+                                    maxIntervalDays: 30,
+                                    onChanged: (cfg) => setState(() {
+                                      _restConfig = cfg;
+                                      if (cfg.mode == SchedulePatternMode.interval &&
+                                          _intervalStartIso == null) {
+                                        _intervalStartIso =
+                                            AppClock.now().toIso8601String();
+                                      }
+                                    }),
                                   ),
                                 ],
                               ),

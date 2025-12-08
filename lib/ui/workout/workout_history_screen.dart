@@ -157,11 +157,26 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen> {
       return;
     }
 
-    wp.startSession(
+    final DateTime today = AppClock.now();
+    final DateTime fallback = DateTime(today.year, today.month, today.day);
+    final DateTime scheduledDay = _parseYmd(log.dateYmd) ?? fallback;
+
+    final result = wp.startSession(
       routineId: routine.id,
       workoutId: workout.id,
       source: 'history',
+      calendarDayOverride: scheduledDay,
     );
+    if (!result.started) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.message ?? 'Unable to start that workout session.',
+          ),
+        ),
+      );
+      return;
+    }
 
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -170,6 +185,7 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen> {
             workoutId: workout.id,
             attachToRoutineId: routine.id,
             source: 'history',
+            scheduledDate: scheduledDay,
           ),
         ),
         settings: const RouteSettings(name: 'session_from_history'),

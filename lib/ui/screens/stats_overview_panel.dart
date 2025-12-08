@@ -331,90 +331,17 @@ class _StatOverviewPanelState extends State<StatOverviewPanel> {
                                                 ),
                                                 const SizedBox(height: 6),
                                                 ...skill.stats.map((stat) {
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
                                                   final statLive =
                                                       provider.stats[stat.id] ??
                                                           stat;
                                                   final statXp =
                                                       statLive.xp; // use XP, not count
-=======
-                                                  final statCount = provider
-                                                      .getStatCount(stat.id);
->>>>>>> theirs
-=======
-                                                  final statCount = provider
-                                                      .getStatCount(stat.id);
->>>>>>> theirs
+                                                  final statCount = statLive.count;
                                                   final statMaxXp =
-                                                      stat.repsForMastery *
-                                                      stat.averageMinutesPerUnit;
+                                                      statLive.maxXp;
                                                   final statLevel =
                                                       LevelUtils.getLevelFromXp(
-<<<<<<< ours
-<<<<<<< ours
                                                         statXp,
-=======
-                                                  final statCount = provider
-                                                      .getStatCount(stat.id);
-                                                  final statMaxXp =
-                                                      stat.repsForMastery *
-                                                      stat.averageMinutesPerUnit;
-                                                  final statLevel =
-                                                      LevelUtils.getLevelFromXp(
-                                                        statCount,
->>>>>>> theirs
-=======
-                                                  final statCount = provider
-                                                      .getStatCount(stat.id);
-                                                  final statMaxXp =
-                                                      stat.repsForMastery *
-                                                      stat.averageMinutesPerUnit;
-                                                  final statLevel =
-                                                      LevelUtils.getLevelFromXp(
-                                                        statCount,
->>>>>>> theirs
-=======
-                                                  final statCount = provider
-                                                      .getStatCount(stat.id);
-                                                  final statMaxXp =
-                                                      stat.repsForMastery *
-                                                      stat.averageMinutesPerUnit;
-                                                  final statLevel =
-                                                      LevelUtils.getLevelFromXp(
-                                                        statCount,
->>>>>>> theirs
-=======
-                                                  final statCount = provider
-                                                      .getStatCount(stat.id);
-                                                  final statMaxXp =
-                                                      stat.repsForMastery *
-                                                      stat.averageMinutesPerUnit;
-                                                  final statLevel =
-                                                      LevelUtils.getLevelFromXp(
-                                                        statCount,
->>>>>>> theirs
-=======
-                                                  final statCount = provider
-                                                      .getStatCount(stat.id);
-                                                  final statMaxXp =
-                                                      stat.repsForMastery *
-                                                      stat.averageMinutesPerUnit;
-                                                  final statLevel =
-                                                      LevelUtils.getLevelFromXp(
-                                                        statCount,
->>>>>>> theirs
-=======
-                                                        statCount,
->>>>>>> theirs
-=======
-                                                        statCount,
->>>>>>> theirs
                                                         statMaxXp,
                                                       );
                                                   final statPrestige =
@@ -452,7 +379,7 @@ class _StatOverviewPanelState extends State<StatOverviewPanel> {
                                                             _buildLevelBadge(
                                                               key: statPillKey,
                                                               level: statLevel,
-                                                              xp: statCount,
+                                                              xp: statXp,
                                                               prestigeColor:
                                                                   statPrestige
                                                                       .color,
@@ -466,7 +393,7 @@ class _StatOverviewPanelState extends State<StatOverviewPanel> {
                                                           ],
                                                         ),
                                                         StatXpBar(
-                                                          xp: statCount,
+                                                          xp: statXp,
                                                           maxXp: statMaxXp,
                                                         ),
                                                       ],

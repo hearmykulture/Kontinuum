@@ -188,4 +188,15 @@ class StatRepository {
         .where((stat) => stat.categoryId == categoryId)
         .toList();
   }
+
+  static void upsert(StatMetadata stat) {
+    final normalizedCategoryId = stat.categoryId.toUpperCase();
+    _stats[stat.id] = StatMetadata(
+      id: stat.id,
+      label: stat.label,
+      categoryId: normalizedCategoryId,
+      emoji: stat.emoji,
+      description: stat.description,
+    );
+  }
 }

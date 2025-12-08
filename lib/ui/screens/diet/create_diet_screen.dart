@@ -166,7 +166,7 @@ class _CreateDietScreenState extends State<CreateDietScreen> {
       _protein = existing.proteinTarget.round();
       _carbs = existing.carbsTarget.round();
       _fats = existing.fatsTarget.round();
-      _fastingHours = existing.fastingHours ?? 0).round();
+      _fastingHours = (existing.fastingHours ?? 0).round();
 
       _macroMode = (existing.proteinTarget > 0 ||
               existing.carbsTarget > 0 ||

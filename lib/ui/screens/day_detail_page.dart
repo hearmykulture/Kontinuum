@@ -1,6 +1,7 @@
 // lib/ui/screens/day_detail_page.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:hive/hive.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
@@ -26,7 +27,26 @@ class DayPlanStore extends ChangeNotifier {
   static final DayPlanStore I = DayPlanStore._();
   DayPlanStore._();
 
+  static const String _boxName = 'day_plan_store_v1';
+  static Future<void>? _initFuture;
+
+  /// Call once after Hive is ready so reminders + tasks persist between launches.
+  static Future<void> init() {
+    return _initFuture ??= _initialize();
+  }
+
+  static Future<void> _initialize() async {
+    if (!Hive.isBoxOpen(_boxName)) {
+      await Hive.openBox<dynamic>(_boxName);
+    }
+    I._restoreFromBox();
+  }
+
+  static Box<dynamic>? get _boxOrNull =>
+      Hive.isBoxOpen(_boxName) ? Hive.box<dynamic>(_boxName) : null;
+
   final Map<String, _DayPlan> _byKey = {};
+  static const Duration _taskReminderWindow = Duration(hours: 1);
 
   _DayPlan _get(DateTime day) =>
       _byKey.putIfAbsent(_k(day), () => _DayPlan(dateOnly(day)));
@@ -35,9 +55,56 @@ class DayPlanStore extends ChangeNotifier {
       List.unmodifiable(_get(day).reminders);
   List<Task> tasks(DateTime day) => List.unmodifiable(_get(day).tasks);
 
+  void _restoreFromBox() {
+    final box = _boxOrNull;
+    if (box == null) return;
+    _byKey.clear();
+    for (final dynamic rawKey in box.keys) {
+      if (rawKey is! String) continue;
+      final dynamic raw = box.get(rawKey);
+      if (raw is! Map) continue;
+
+      DateTime day;
+      try {
+        day = DateKeys.fromYmd(rawKey);
+      } catch (_) {
+        continue;
+      }
+
+      final _DayPlan plan = _DayPlan(day);
+      plan.reminders.addAll(_deserializeReminders(raw['reminders']));
+      plan.tasks.addAll(_deserializeTasks(raw['tasks']));
+      _byKey[rawKey] = plan;
+    }
+    notifyListeners();
+  }
+
+  void _persistPlan(_DayPlan plan) {
+    final box = _boxOrNull;
+    if (box == null) return;
+    final String key = _k(plan.day);
+    if (plan.reminders.isEmpty && plan.tasks.isEmpty) {
+      if (box.containsKey(key)) {
+        box.delete(key);
+      }
+      _byKey.remove(key);
+    } else {
+      box.put(key, _serializePlan(plan));
+    }
+  }
+
+  void _persistPlans(Iterable<_DayPlan> plans) {
+    if (_boxOrNull == null) return;
+    for (final _DayPlan plan in plans) {
+      _persistPlan(plan);
+    }
+  }
+
   /// --- Basic add (single slice) ---
   void addReminder(DateTime day, Reminder r, {bool notify = true}) {
-    _get(day).reminders.add(r);
+    final _DayPlan plan = _get(day);
+    plan.reminders.add(r);
+    _persistPlan(plan);
     if (notify) notifyListeners();
   }
 
@@ -58,6 +125,7 @@ class DayPlanStore extends ChangeNotifier {
     final endDay = dateOnly(end);
     final totalDays = endDay.difference(startDay).inDays;
 
+    final Set<_DayPlan> touched = <_DayPlan>{};
     for (int i = 0; i <= totalDays; i++) {
       final d = startDay.add(Duration(days: i));
 
@@ -94,17 +162,41 @@ class DayPlanStore extends ChangeNotifier {
         start: segStart,
         end: segEnd,
       );
-      _get(d).reminders.add(slice);
+      final _DayPlan plan = _get(d);
+      plan.reminders.add(slice);
+      touched.add(plan);
     }
+    _persistPlans(touched);
     if (notify) notifyListeners();
   }
 
   /// Remove all slices that belong to a series.
-  void removeReminderGroup(String groupId, {bool notify = true}) {
+  void removeReminderGroup(
+    String groupId, {
+    bool notify = true,
+    bool detachTaskLinks = true,
+  }) {
+    bool removed = false;
+    final Set<_DayPlan> touched = <_DayPlan>{};
     for (final p in _byKey.values) {
+      final int before = p.reminders.length;
       p.reminders.removeWhere((r) => r.groupId == groupId);
+      if (p.reminders.length != before) {
+        removed = true;
+        touched.add(p);
+      }
     }
-    if (notify) notifyListeners();
+
+    if (touched.isNotEmpty) {
+      _persistPlans(touched);
+    }
+
+    final bool clearedTaskReminder =
+        detachTaskLinks && _clearReminderLinkForGroup(groupId);
+
+    if (notify && (removed || clearedTaskReminder)) {
+      notifyListeners();
+    }
   }
 
   /// Convenience for edit: replace whole series with new definition.
@@ -115,7 +207,11 @@ class DayPlanStore extends ChangeNotifier {
     required DateTime end,
     required bool allDay,
   }) {
-    removeReminderGroup(groupId, notify: false);
+    removeReminderGroup(
+      groupId,
+      notify: false,
+      detachTaskLinks: false,
+    );
     addReminderSeries(
       groupId: groupId,
       title: title,
@@ -128,7 +224,10 @@ class DayPlanStore extends ChangeNotifier {
   }
 
   void addTask(DateTime day, Task t, {bool notify = true}) {
-    _get(day).tasks.add(t);
+    final _DayPlan plan = _get(day);
+    plan.tasks.add(t);
+    _syncTaskReminder(t);
+    _persistPlan(plan);
     if (notify) notifyListeners();
   }
 
@@ -140,12 +239,21 @@ class DayPlanStore extends ChangeNotifier {
     Task? replaceWith,
     bool notify = true,
   }) {
-    final src = _get(fromDay).tasks;
+    final _DayPlan fromPlan = _get(fromDay);
+    final List<Task> src = fromPlan.tasks;
     final i = src.indexWhere((t) => t.id == id);
     if (i == -1) return;
     final moving = replaceWith ?? src[i];
     src.removeAt(i);
-    _get(toDay).tasks.add(moving);
+    final _DayPlan toPlan = _get(toDay);
+    toPlan.tasks.add(moving);
+    _syncTaskReminder(moving);
+    _persistPlan(fromPlan);
+    if (!identical(fromPlan, toPlan)) {
+      _persistPlan(toPlan);
+    } else {
+      // Already persisted via fromPlan.
+    }
     if (notify) notifyListeners();
   }
 
@@ -153,8 +261,94 @@ class DayPlanStore extends ChangeNotifier {
   static String genId() =>
       DateTime.now().microsecondsSinceEpoch.toRadixString(36);
 
+  static String _taskReminderGroupId(String taskId) => 'task_$taskId';
+  static const String _taskReminderPrefix = 'task_';
+
+  void _removeTaskReminder(String taskId) {
+    removeReminderGroup(
+      _taskReminderGroupId(taskId),
+      notify: false,
+      detachTaskLinks: false,
+    );
+  }
+
+  void _syncTaskReminder(Task task) {
+    final remindAt = task.remindAt;
+    _removeTaskReminder(task.id);
+    if (remindAt == null) return;
+
+    final DateTime reminderDay = dateOnly(remindAt);
+    final TimeOfDay start =
+        TimeOfDay(hour: remindAt.hour, minute: remindAt.minute);
+
+    DateTime endInstant = remindAt.add(_taskReminderWindow);
+    final bool crossesDay = endInstant.year != reminderDay.year ||
+        endInstant.month != reminderDay.month ||
+        endInstant.day != reminderDay.day;
+    if (crossesDay) {
+      endInstant = DateTime(
+        reminderDay.year,
+        reminderDay.month,
+        reminderDay.day,
+        23,
+        59,
+      );
+    }
+    final TimeOfDay end =
+        TimeOfDay(hour: endInstant.hour, minute: endInstant.minute);
+
+    final Reminder slice = Reminder(
+      id: genId(),
+      groupId: _taskReminderGroupId(task.id),
+      title: task.title,
+      start: start,
+      end: end,
+    );
+    final _DayPlan plan = _get(reminderDay);
+    plan.reminders.add(slice);
+    _persistPlan(plan);
+  }
+
+  void updateTaskReminderForGroup(String groupId, DateTime remindAt) {
+    if (_setTaskReminderForGroup(groupId, remindAt)) {
+      notifyListeners();
+    }
+  }
+
+  bool _setTaskReminderForGroup(String groupId, DateTime remindAt) {
+    if (!groupId.startsWith(_taskReminderPrefix)) return false;
+    final String taskId = groupId.substring(_taskReminderPrefix.length);
+    return _setTaskReminder(taskId, remindAt);
+  }
+
+  bool _clearReminderLinkForGroup(String groupId) {
+    if (!groupId.startsWith(_taskReminderPrefix)) return false;
+    final String taskId = groupId.substring(_taskReminderPrefix.length);
+    return _setTaskReminder(taskId, null);
+  }
+
+  bool _setTaskReminder(String taskId, DateTime? remindAt) {
+    for (final plan in _byKey.values) {
+      final tasks = plan.tasks;
+      final int index = tasks.indexWhere((t) => t.id == taskId);
+      if (index == -1) continue;
+      final Task current = tasks[index];
+      final DateTime? existing = current.remindAt;
+      final bool sameMoment = existing == remindAt ||
+          (existing != null &&
+              remindAt != null &&
+              existing.isAtSameMomentAs(remindAt));
+      if (sameMoment) return false;
+      tasks[index] = current.copyWith(remindAt: remindAt);
+      _persistPlan(plan);
+      return true;
+    }
+    return false;
+  }
+
   void toggleTask(DateTime day, String id, bool value) {
-    final list = _get(day).tasks;
+    final _DayPlan plan = _get(day);
+    final List<Task> list = plan.tasks;
     final i = list.indexWhere((t) => t.id == id);
     if (i == -1) return;
 
@@ -176,44 +370,118 @@ class DayPlanStore extends ChangeNotifier {
         completedAt: null,
         scheduledStart: cur.scheduledStart?.add(const Duration(days: 1)),
         scheduledEnd: cur.scheduledEnd?.add(const Duration(days: 1)),
+        due: cur.due?.add(const Duration(days: 1)),
+        remindAt: cur.remindAt?.add(const Duration(days: 1)),
         checklist: cur.checklist
             .map((c) => TaskChecklistEntry(text: c.text, done: false))
             .toList(),
+        repeatParentId: cur.id,
       );
       addTask(nextDay, clone, notify: false);
+    } else if (!value && cur.repeatOnCompletion) {
+      _removeRepeatChildren(cur.id);
     }
+
+    _persistPlan(plan);
 
     // Single notify for the whole toggle operation
     notifyListeners();
   }
 
+  void toggleChecklistEntry(
+    DateTime day,
+    String taskId,
+    int index,
+    bool done,
+  ) {
+    final String key = _k(day);
+    final _DayPlan? plan = _byKey[key];
+    if (plan == null) return;
+
+    final int taskIdx = plan.tasks.indexWhere((t) => t.id == taskId);
+    if (taskIdx == -1) return;
+
+    final Task task = plan.tasks[taskIdx];
+    if (index < 0 || index >= task.checklist.length) return;
+
+    final TaskChecklistEntry current = task.checklist[index];
+    if (current.done == done) return;
+
+    final List<TaskChecklistEntry> updatedChecklist =
+        List<TaskChecklistEntry>.from(task.checklist);
+    updatedChecklist[index] =
+        TaskChecklistEntry(text: current.text, done: done);
+
+    plan.tasks[taskIdx] = task.copyWith(checklist: updatedChecklist);
+    _persistPlan(plan);
+    notifyListeners();
+  }
+
+  void _removeRepeatChildren(String parentId) {
+    final Set<_DayPlan> touched = <_DayPlan>{};
+    for (final plan in _byKey.values) {
+      final list = plan.tasks;
+      for (int i = list.length - 1; i >= 0; i--) {
+        final task = list[i];
+        if (task.repeatParentId == parentId) {
+          final removed = list.removeAt(i);
+          _removeTaskReminder(removed.id);
+          touched.add(plan);
+        }
+      }
+    }
+    if (touched.isNotEmpty) {
+      _persistPlans(touched);
+    }
+  }
+
   // ===== Helpers (single-slice edit/delete) =====
   void removeReminder(DateTime day, String id) {
-    final list = _get(day).reminders;
+    final _DayPlan plan = _get(day);
+    final list = plan.reminders;
+    final int before = list.length;
     list.removeWhere((r) => r.id == id);
+    if (list.length == before) return;
+    _persistPlan(plan);
     notifyListeners();
   }
 
   void replaceReminder(DateTime day, String id, Reminder next) {
-    final list = _get(day).reminders;
+    final _DayPlan plan = _get(day);
+    final list = plan.reminders;
     final i = list.indexWhere((r) => r.id == id);
     if (i != -1) {
       list[i] = next;
+      _persistPlan(plan);
       notifyListeners();
     }
   }
 
   void removeTask(DateTime day, String id) {
-    final list = _get(day).tasks;
-    list.removeWhere((t) => t.id == id);
+    final _DayPlan plan = _get(day);
+    final list = plan.tasks;
+    bool removed = false;
+    list.removeWhere((t) {
+      if (t.id == id) {
+        removed = true;
+        _removeTaskReminder(id);
+        return true;
+      }
+      return false;
+    });
+    if (!removed) return;
+    _persistPlan(plan);
     notifyListeners();
   }
 
   void replaceTask(DateTime day, String id, Task next) {
-    final list = _get(day).tasks;
+    final _DayPlan plan = _get(day);
+    final list = plan.tasks;
     final i = list.indexWhere((t) => t.id == id);
     if (i != -1) {
       list[i] = next;
+      _syncTaskReminder(next);
+      _persistPlan(plan);
       notifyListeners();
     }
   }
@@ -309,6 +577,185 @@ class DayPlanStore extends ChangeNotifier {
   // Keying now uses centralized DateKeys (local yyyy-MM-dd)
   static String _k(DateTime d) => DateKeys.ymd(dateOnly(d));
   static DateTime dateOnly(DateTime d) => DateKeys.dateOnly(d);
+
+  static Map<String, dynamic> _serializePlan(_DayPlan plan) {
+    return <String, dynamic>{
+      'day': _k(plan.day),
+      'reminders':
+          plan.reminders.map<Map<String, dynamic>>(_serializeReminder).toList(),
+      'tasks': plan.tasks.map<Map<String, dynamic>>(_serializeTask).toList(),
+    };
+  }
+
+  static Map<String, dynamic> _serializeReminder(Reminder reminder) {
+    return <String, dynamic>{
+      'id': reminder.id,
+      'groupId': reminder.groupId,
+      'title': reminder.title,
+      'start': _encodeTimeOfDay(reminder.start),
+      'end': _encodeTimeOfDay(reminder.end),
+    };
+  }
+
+  static Map<String, int>? _encodeTimeOfDay(TimeOfDay? value) {
+    if (value == null) return null;
+    return <String, int>{'h': value.hour, 'm': value.minute};
+  }
+
+  static TimeOfDay? _decodeTimeOfDay(dynamic raw) {
+    if (raw is Map) {
+      final dynamic h = raw['h'];
+      final dynamic m = raw['m'];
+      if (h is num && m is num) {
+        final int hour = h.toInt().clamp(0, 23);
+        final int minute = m.toInt().clamp(0, 59);
+        return TimeOfDay(hour: hour, minute: minute);
+      }
+    }
+    return null;
+  }
+
+  static String? _encodeDateTime(DateTime? value) => value?.toIso8601String();
+
+  static DateTime? _decodeDateTime(dynamic raw) {
+    if (raw is String && raw.isNotEmpty) {
+      return DateTime.tryParse(raw);
+    }
+    return null;
+  }
+
+  static Map<String, dynamic> _serializeTask(Task task) {
+    return <String, dynamic>{
+      'id': task.id,
+      'title': task.title,
+      'done': task.done,
+      'due': _encodeDateTime(task.due),
+      'remindAt': _encodeDateTime(task.remindAt),
+      'scheduledStart': _encodeDateTime(task.scheduledStart),
+      'scheduledEnd': _encodeDateTime(task.scheduledEnd),
+      'repeatOnCompletion': task.repeatOnCompletion,
+      'checklist': _serializeChecklist(task.checklist),
+      'priority': task.priority,
+      'projectId': task.projectId,
+      'completedAt': _encodeDateTime(task.completedAt),
+      'stats': task.stats.map((s) => s.toJson()).toList(),
+      'repeatParentId': task.repeatParentId,
+    };
+  }
+
+  static List<Map<String, dynamic>> _serializeChecklist(
+    List<TaskChecklistEntry> entries,
+  ) {
+    return entries
+        .map<Map<String, dynamic>>(
+          (entry) => <String, dynamic>{
+            'text': entry.text,
+            'done': entry.done,
+          },
+        )
+        .toList();
+  }
+
+  static List<Reminder> _deserializeReminders(dynamic raw) {
+    final List<Reminder> reminders = <Reminder>[];
+    if (raw is! List) return reminders;
+    for (final item in raw) {
+      if (item is! Map) continue;
+      final map = _stringKeyedMap(item as Map<dynamic, dynamic>);
+      final String? id = map['id'] as String?;
+      final String? groupId = map['groupId'] as String?;
+      final String? title = map['title'] as String?;
+      if (id == null || groupId == null || title == null) continue;
+      reminders.add(
+        Reminder(
+          id: id,
+          title: title,
+          groupId: groupId,
+          start: _decodeTimeOfDay(map['start']),
+          end: _decodeTimeOfDay(map['end']),
+        ),
+      );
+    }
+    return reminders;
+  }
+
+  static List<TaskChecklistEntry> _deserializeChecklist(dynamic raw) {
+    final List<TaskChecklistEntry> entries = <TaskChecklistEntry>[];
+    if (raw is! List) return entries;
+    for (final item in raw) {
+      if (item is! Map) continue;
+      final map = _stringKeyedMap(item as Map<dynamic, dynamic>);
+      final String? text = map['text'] as String?;
+      if (text == null || text.isEmpty) continue;
+      entries.add(TaskChecklistEntry(text: text, done: map['done'] == true));
+    }
+    return entries;
+  }
+
+  static List<Task> _deserializeTasks(dynamic raw) {
+    final List<Task> tasks = <Task>[];
+    if (raw is! List) return tasks;
+    for (final item in raw) {
+      if (item is! Map) continue;
+      final map = _stringKeyedMap(item as Map<dynamic, dynamic>);
+      try {
+        tasks.add(_taskFromMap(map));
+      } catch (_) {
+        // ignore malformed rows
+      }
+    }
+    return tasks;
+  }
+
+  static Task _taskFromMap(Map<String, dynamic> map) {
+    return Task(
+      id: (map['id'] as String?) ?? genId(),
+      title: (map['title'] as String?) ?? 'Untitled task',
+      done: map['done'] == true,
+      due: _decodeDateTime(map['due']),
+      remindAt: _decodeDateTime(map['remindAt']),
+      scheduledStart: _decodeDateTime(map['scheduledStart']),
+      scheduledEnd: _decodeDateTime(map['scheduledEnd']),
+      repeatOnCompletion: map['repeatOnCompletion'] == true,
+      checklist: _deserializeChecklist(map['checklist']),
+      priority: _asInt(map['priority'], 0),
+      projectId: map['projectId'] as String?,
+      completedAt: _decodeDateTime(map['completedAt']),
+      stats: _deserializeStats(map['stats']),
+      repeatParentId: map['repeatParentId'] as String?,
+    );
+  }
+
+  static List<tmodel.StatPick> _deserializeStats(dynamic raw) {
+    final List<tmodel.StatPick> stats = <tmodel.StatPick>[];
+    if (raw is! List) return stats;
+    for (final item in raw) {
+      if (item is! Map) continue;
+      final map = _stringKeyedMap(item as Map<dynamic, dynamic>);
+      try {
+        stats.add(tmodel.StatPick.fromJson(map));
+      } catch (_) {
+        // ignore malformed stat picks
+      }
+    }
+    return stats;
+  }
+
+  static int _asInt(dynamic raw, [int fallback = 0]) {
+    if (raw is int) return raw;
+    if (raw is num) return raw.toInt();
+    if (raw is String) return int.tryParse(raw) ?? fallback;
+    return fallback;
+  }
+
+  static Map<String, dynamic> _stringKeyedMap(Map<dynamic, dynamic> raw) {
+    final result = <String, dynamic>{};
+    raw.forEach((key, value) {
+      if (key == null) return;
+      result['$key'] = value;
+    });
+    return result;
+  }
 }
 
 class _DayPlan {
@@ -356,6 +803,7 @@ class Task {
     this.projectId,
     this.completedAt,
     this.stats = const <tmodel.StatPick>[], // ✅ multi-stat payload
+    this.repeatParentId,
   });
 
   final String id;
@@ -373,6 +821,7 @@ class Task {
 
   /// New: selected stat rewards for this task (can be empty).
   final List<tmodel.StatPick> stats;
+  final String? repeatParentId;
 
   Task copyWith({
     String? id,
@@ -388,6 +837,7 @@ class Task {
     String? projectId,
     DateTime? completedAt,
     List<tmodel.StatPick>? stats, // ✅ copyWith support
+    String? repeatParentId,
   }) {
     return Task(
       id: id ?? this.id,
@@ -403,6 +853,7 @@ class Task {
       projectId: projectId ?? this.projectId,
       completedAt: completedAt ?? this.completedAt,
       stats: stats ?? this.stats,
+      repeatParentId: repeatParentId ?? this.repeatParentId,
     );
   }
 }
@@ -443,9 +894,18 @@ class AgendaView {
 enum _DetailTab { summary, schedule }
 
 class DayDetailPage extends StatefulWidget {
-  const DayDetailPage({super.key, required this.day});
+  const DayDetailPage({
+    super.key,
+    required this.day,
+    this.startInSchedule = false,
+    this.focusTaskId,
+    this.autoCompleteTaskId,
+  });
 
   final DateTime day;
+  final bool startInSchedule;
+  final String? focusTaskId;
+  final String? autoCompleteTaskId;
 
   @override
   State<DayDetailPage> createState() => _DayDetailPageState();
@@ -463,6 +923,18 @@ class _DayDetailPageState extends State<DayDetailPage> {
 
   // ✅ Default to Summary (blue) so blank-day opens the default view
   _DetailTab _tab = _DetailTab.summary;
+  bool _autoCompleteTriggered = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _tab = widget.startInSchedule ? _DetailTab.schedule : _DetailTab.summary;
+    if (widget.autoCompleteTaskId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _triggerAutoCompleteIfNeeded();
+      });
+    }
+  }
 
   DateTime get _dayOnly => DayPlanStore.dateOnly(widget.day);
 
@@ -483,9 +955,14 @@ class _DayDetailPageState extends State<DayDetailPage> {
 
   Future<void> _openTask(Task t) async {
     // Build initial options for the editor from the existing task
-    final DateTime? initialDate = t.due ?? t.scheduledStart ?? t.remindAt;
+    final DateTime? initialDate =
+        t.scheduledStart ?? t.remindAt ?? t.due;
+    final DateTime? initialDeadline = t.due;
     final tmodel.TaskOptionsValue initialOptions = tmodel.TaskOptionsValue(
       date: initialDate == null ? null : DayPlanStore.dateOnly(initialDate),
+      deadline: initialDeadline == null
+          ? null
+          : DayPlanStore.dateOnly(initialDeadline),
       someday: false, // if you support Someday as a stored flag, map it here
       repeatsDaily: t.repeatOnCompletion,
       hasReminder: t.remindAt != null,
@@ -521,11 +998,12 @@ class _DayDetailPageState extends State<DayDetailPage> {
 
     // Map editor result back to the task model
     final pickedDate = res.date;
+    final deadline = res.deadline;
     final updated = t.copyWith(
       title: res.title,
       repeatOnCompletion: res.repeatOnCompletion,
-      due: (res.hasDeadline && pickedDate != null)
-          ? DayPlanStore.dateOnly(pickedDate)
+      due: (res.hasDeadline && deadline != null)
+          ? DayPlanStore.dateOnly(deadline)
           : null,
       remindAt: (res.hasReminder && pickedDate != null)
           ? DateTime(pickedDate.year, pickedDate.month, pickedDate.day, 9, 0)
@@ -620,6 +1098,8 @@ class _DayDetailPageState extends State<DayDetailPage> {
                       panelColor: _schedPanel,
                       onOpenReminder: _openReminder,
                       onOpenTask: _openTask,
+                      focusTaskId:
+                          widget.focusTaskId ?? widget.autoCompleteTaskId,
                       key: const ValueKey('schedule'),
                     ),
             ),
@@ -713,27 +1193,38 @@ class _DayDetailPageState extends State<DayDetailPage> {
             .map((tmodel.ChecklistEntry c) =>
                 TaskChecklistEntry(text: c.text, done: c.done))
             .toList(),
-        due: (result.hasDeadline && result.date != null) ? placeOn : null,
+        due: (result.hasDeadline && result.deadline != null)
+            ? DayPlanStore.dateOnly(result.deadline!)
+            : null,
         remindAt: (result.hasReminder && result.date != null)
             ? DateTime(placeOn.year, placeOn.month, placeOn.day, 9, 0)
             : null,
         stats: result.stats, // ✅ persist from create flow
       );
       DayPlanStore.I.addTask(placeOn, task);
-      // Optional: mirror a one-hour reminder block at 9am if hasReminder
-      if (task.remindAt != null) {
-        DayPlanStore.I.addReminder(
-          placeOn,
-          Reminder(
-            id: DayPlanStore.genId(),
-            title: task.title,
-            groupId: 'task_${task.id}',
-            start: const TimeOfDay(hour: 9, minute: 0),
-            end: const TimeOfDay(hour: 10, minute: 0),
-          ),
-        );
+    }
+  }
+
+  Future<void> _triggerAutoCompleteIfNeeded() async {
+    if (_autoCompleteTriggered || !mounted) return;
+    final String? taskId = widget.autoCompleteTaskId;
+    if (taskId == null) return;
+    final DateTime day = DayPlanStore.dateOnly(widget.day);
+    Task? target;
+    for (final task in DayPlanStore.I.tasks(day)) {
+      if (task.id == taskId) {
+        target = task;
+        break;
       }
     }
+    if (target == null || target.done) return;
+    _autoCompleteTriggered = true;
+    if (_tab != _DetailTab.schedule) {
+      setState(() => _tab = _DetailTab.schedule);
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      if (!mounted) return;
+    }
+    await _SummaryView._completeTaskAndShowXp(context, day, target);
   }
 }
 
@@ -783,6 +1274,8 @@ class _SummaryView extends StatelessWidget {
                   },
                   // ✅ Title opens the Task Editor
                   onOpen: () => _openTask(context, t),
+                  onToggleSubtask: (index, value) =>
+                      DayPlanStore.I.toggleChecklistEntry(day, t.id, index, value),
                 ),
               ),
             const SizedBox(height: 18),
@@ -950,6 +1443,7 @@ class _ScheduleView extends StatelessWidget {
     required this.panelColor,
     required this.onOpenReminder,
     required this.onOpenTask,
+    this.focusTaskId,
     super.key,
   });
 
@@ -957,6 +1451,29 @@ class _ScheduleView extends StatelessWidget {
   final Color panelColor;
   final void Function(Reminder r) onOpenReminder;
   final void Function(Task t) onOpenTask;
+  final String? focusTaskId;
+
+  Future<void> _completeTask(BuildContext context, Task task) async {
+    if (_taskHasIncompleteSubtasks(task)) {
+      _showIncompleteSubtasksSnackBar(context);
+      return;
+    }
+    await _SummaryView._completeTaskAndShowXp(context, day, task);
+  }
+
+  BoxDecoration _focusDecoration(double radius) {
+    return BoxDecoration(
+      borderRadius: BorderRadius.circular(radius),
+      border: Border.all(color: Colors.white, width: 1.4),
+      boxShadow: const [
+        BoxShadow(
+          color: Color(0x55FFFFFF),
+          blurRadius: 12,
+          offset: Offset(0, 2),
+        ),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -993,35 +1510,44 @@ class _ScheduleView extends StatelessWidget {
                     ),
                     const SizedBox(height: 8),
                     ...agenda.overdue.map(
-                      (t) => Padding(
-                        padding: const EdgeInsets.only(bottom: 6),
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(10),
-                          onTap: () => onOpenTask(t),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 8,
-                                height: 8,
-                                decoration: const BoxDecoration(
-                                  color: Color(0xFFFFC0C0),
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  t.title,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w700,
+                      (t) {
+                        final isFocus = focusTaskId != null && t.id == focusTaskId;
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 6),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: () => onOpenTask(t),
+                            child: Container(
+                              decoration:
+                                  isFocus ? _focusDecoration(12) : null,
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 4),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 8,
+                                    height: 8,
+                                    decoration: const BoxDecoration(
+                                      color: Color(0xFFFFC0C0),
+                                      shape: BoxShape.circle,
+                                    ),
                                   ),
-                                ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      t.title,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ],
+                            ),
                           ),
-                        ),
-                      ),
+                        );
+                      },
                     ),
                   ],
                 ),
@@ -1050,45 +1576,70 @@ class _ScheduleView extends StatelessWidget {
                     ),
                     const SizedBox(height: 8),
                     ...agenda.allDay.map(
-                      (t) => Padding(
-                        padding: const EdgeInsets.only(bottom: 6),
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(10),
-                          onTap: () => onOpenTask(t),
-                          child: Row(
-                            children: [
-                              // ✅ Inline complete button
-                              InkResponse(
-                                onTap: () =>
-                                    _SummaryView._completeTaskAndShowXp(
-                                  context,
-                                  day,
-                                  t,
-                                ),
-                                customBorder: const CircleBorder(),
-                                child: const Padding(
-                                  padding: EdgeInsets.all(6.0),
-                                  child: Icon(
-                                    Icons.circle_outlined,
-                                    color: Colors.white,
-                                    size: 20,
+                      (t) {
+                        final isFocus = focusTaskId != null && t.id == focusTaskId;
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 6),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: () => onOpenTask(t),
+                            child: Container(
+                              decoration:
+                                  isFocus ? _focusDecoration(12) : null,
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 6),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    crossAxisAlignment: CrossAxisAlignment.center,
+                                    children: [
+                                  InkResponse(
+                                    onTap: () => _completeTask(context, t),
+                                    customBorder: const CircleBorder(),
+                                    child: const Padding(
+                                      padding: EdgeInsets.all(6.0),
+                                      child: Icon(
+                                        Icons.circle_outlined,
+                                            color: Colors.white,
+                                            size: 20,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          t.title,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                ),
+                                  if (t.checklist.isNotEmpty) ...[
+                                    const SizedBox(height: 6),
+                                    _ChecklistPreview(
+                                      entries: t.checklist,
+                                      textColor: const Color(0xE6FFFFFF),
+                                      maxVisible: 4,
+                                      compact: true,
+                                      onToggle: (index, value) =>
+                                          DayPlanStore.I.toggleChecklistEntry(
+                                        day,
+                                        t.id,
+                                        index,
+                                        value,
+                                      ),
+                                    ),
+                                  ],
+                                ],
                               ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  t.title,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                            ],
+                            ),
                           ),
-                        ),
-                      ),
+                        );
+                      },
                     ),
                   ],
                 ),
@@ -1129,6 +1680,7 @@ class _ScheduleView extends StatelessWidget {
                   onOpenReminder(itm.source as Reminder);
                 }
               },
+              highlightTaskId: focusTaskId,
             ),
           ],
         );
@@ -1312,55 +1864,224 @@ class _TaskCard extends StatelessWidget {
     required this.task,
     required this.onChanged,
     required this.onOpen,
+    this.onToggleSubtask,
   });
 
   final Task task;
   final ValueChanged<bool> onChanged;
   final VoidCallback onOpen;
+  final void Function(int index, bool value)? onToggleSubtask;
+
+  void _handleTaskToggle(BuildContext context, bool desiredValue) {
+    final bool wantsToComplete = desiredValue && !task.done;
+    if (wantsToComplete && _taskHasIncompleteSubtasks(task)) {
+      _showIncompleteSubtasksSnackBar(context);
+      return;
+    }
+    onChanged(desiredValue);
+  }
 
   @override
   Widget build(BuildContext context) {
     return _Card(
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ✅ Only this checkbox toggles completion
-            Checkbox(
-              value: task.done,
-              onChanged: (v) => onChanged(v ?? false),
-              shape: const CircleBorder(),
-              side: const BorderSide(color: Colors.white70),
-              activeColor: Colors.white,
-              checkColor: const Color(0xFF262C34),
-              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            const SizedBox(width: 6),
-            // ✅ Only this title area opens the editor
-            Expanded(
-              child: InkWell(
-                onTap: onOpen,
-                borderRadius: BorderRadius.circular(10),
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
-                  child: Text(
-                    task.title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 15,
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // ✅ Only this checkbox toggles completion
+                Checkbox(
+                  value: task.done,
+                  onChanged: (v) => _handleTaskToggle(context, v ?? false),
+                  shape: const CircleBorder(),
+                  side: const BorderSide(color: Colors.white70),
+                  activeColor: Colors.white,
+                  checkColor: const Color(0xFF262C34),
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                const SizedBox(width: 6),
+                // ✅ Only this title area opens the editor
+                Expanded(
+                  child: InkWell(
+                    onTap: onOpen,
+                    borderRadius: BorderRadius.circular(10),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 10,
+                        horizontal: 6,
+                      ),
+                      child: Text(
+                        task.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ),
+              ],
             ),
-            const SizedBox(width: 6),
+            if (task.checklist.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _ChecklistPreview(
+                entries: task.checklist,
+                onToggle: onToggleSubtask,
+              ),
+            ],
           ],
         ),
+      ),
+    );
+  }
+}
+
+bool _taskHasIncompleteSubtasks(Task task) =>
+    task.checklist.any((entry) => !entry.done);
+
+void _showIncompleteSubtasksSnackBar(BuildContext context) {
+  final messenger = ScaffoldMessenger.of(context);
+  messenger.hideCurrentSnackBar();
+  messenger.showSnackBar(
+    const SnackBar(
+      content: Text('Check off subtasks first to complete this task.'),
+      duration: Duration(milliseconds: 1600),
+      behavior: SnackBarBehavior.floating,
+    ),
+  );
+}
+
+/// Lightweight checklist view that now supports inline toggling.
+class _ChecklistPreview extends StatelessWidget {
+  const _ChecklistPreview({
+    required this.entries,
+    this.textColor = const Color(0xCCFFFFFF),
+    this.maxVisible,
+    this.compact = false,
+    this.onToggle,
+  });
+
+  final List<TaskChecklistEntry> entries;
+  final Color textColor;
+  final int? maxVisible;
+  final bool compact;
+  final void Function(int index, bool value)? onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    if (entries.isEmpty) return const SizedBox.shrink();
+
+    final int visibleCount;
+    if (maxVisible == null) {
+      visibleCount = entries.length;
+    } else if (maxVisible! <= 0) {
+      visibleCount = 0;
+    } else if (maxVisible! >= entries.length) {
+      visibleCount = entries.length;
+    } else {
+      visibleCount = maxVisible!;
+    }
+
+    final List<TaskChecklistEntry> visible =
+        entries.take(visibleCount).toList();
+    final int remaining = entries.length - visible.length;
+    if (visible.isEmpty) {
+      return Text(
+        '+$remaining more',
+        style: TextStyle(
+          color: textColor.withOpacity(0.7),
+          fontSize: (compact ? 12 : 13) - 1,
+          fontWeight: FontWeight.w600,
+        ),
+      );
+    }
+
+    final double fontSize = compact ? 12 : 13;
+    final double rowSpacing = compact ? 4 : 6;
+    final Color doneColor = textColor.withOpacity(0.65);
+    final Color todoColor = textColor.withOpacity(0.95);
+    final bool interactive = onToggle != null;
+    final double iconSize = compact ? 15 : 17;
+
+    final List<Widget> rows = <Widget>[];
+    for (int i = 0; i < visible.length; i++) {
+      final entry = visible[i];
+      final row = Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(
+            entry.done ? Icons.check_circle_rounded : Icons.circle_outlined,
+            size: iconSize,
+            color: entry.done ? doneColor : todoColor.withOpacity(0.85),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              entry.text,
+              style: TextStyle(
+                color: entry.done ? doneColor : todoColor,
+                fontSize: fontSize,
+                fontWeight: FontWeight.w600,
+                decoration: entry.done ? TextDecoration.lineThrough : null,
+                height: 1.25,
+              ),
+            ),
+          ),
+        ],
+      );
+
+      rows.add(
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: interactive
+              ? () => onToggle!(i, !entry.done)
+              : null,
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+              vertical: compact ? 3 : 4,
+            ),
+            child: row,
+          ),
+        ),
+      );
+
+      if (i != visible.length - 1 || remaining > 0) {
+        rows.add(SizedBox(height: rowSpacing));
+      }
+    }
+
+    if (remaining > 0) {
+      rows.add(
+        Text(
+          '+$remaining more',
+          style: TextStyle(
+            color: textColor.withOpacity(0.7),
+            fontSize: fontSize - 1,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(compact ? 0.04 : 0.07),
+        borderRadius: BorderRadius.circular(compact ? 9 : 12),
+      ),
+      padding: EdgeInsets.symmetric(
+        vertical: compact ? 4 : 6,
+        horizontal: compact ? 6 : 10,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: rows,
       ),
     );
   }
@@ -1458,10 +2179,15 @@ class _AddActionTile extends StatelessWidget {
 /// Timeline board (now unified for reminders + scheduled tasks)
 /// --------------------------------------------------------------------------------
 class _TimelineBoard extends StatelessWidget {
-  const _TimelineBoard({required this.items, required this.onTapItem});
+  const _TimelineBoard({
+    required this.items,
+    required this.onTapItem,
+    this.highlightTaskId,
+  });
 
   final List<_BoardItem> items;
   final void Function(_BoardItem item) onTapItem;
+  final String? highlightTaskId;
 
   static const double _leftLabelsWidth = 56;
   static const double _rowHeight = 76;
@@ -1588,6 +2314,9 @@ class _TimelineBoard extends StatelessWidget {
                         child: _BoardCard(
                           item: e.item,
                           onTap: () => onTapItem(e.item),
+                          highlight: highlightTaskId != null &&
+                              highlightTaskId == e.item.id &&
+                              e.item.isTask,
                         ),
                       );
                     }),
@@ -1611,9 +2340,10 @@ class _Evt {
 }
 
 class _BoardCard extends StatelessWidget {
-  const _BoardCard({required this.item, this.onTap});
+  const _BoardCard({required this.item, this.onTap, this.highlight = false});
   final _BoardItem item;
   final VoidCallback? onTap;
+  final bool highlight;
 
   @override
   Widget build(BuildContext context) {
@@ -1628,12 +2358,22 @@ class _BoardCard extends StatelessWidget {
             color:
                 item.isTask ? const Color(0xFF27455A) : const Color(0xFF5A0E1E),
             borderRadius: BorderRadius.circular(18),
-            boxShadow: const [
+            border: highlight
+                ? Border.all(color: Colors.white, width: 1.6)
+                : null,
+            boxShadow: [
               BoxShadow(
                 color: Color(0x55000000),
                 blurRadius: 12,
                 offset: Offset(0, 6),
               ),
+              if (highlight)
+                const BoxShadow(
+                  color: Color(0x66FFFFFF),
+                  blurRadius: 16,
+                  spreadRadius: 1,
+                  offset: Offset(0, 0),
+                ),
             ],
           ),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),

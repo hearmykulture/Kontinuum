@@ -76,9 +76,10 @@ class _FullscreenCalendarPageState extends State<FullscreenCalendarPage>
   // Jump-to-today button
   static const double _jumpSize = 44.0;
 
-  late final int _year;
+  late int _year;
   late DateTime _selected;
   String _activeOverlay = '';
+  bool _yearTransitioning = false;
 
   // Upward + fade-in controller
   late final AnimationController _revealCtrl;
@@ -113,6 +114,7 @@ class _FullscreenCalendarPageState extends State<FullscreenCalendarPage>
 
   // "Jump to Today" visibility
   bool _showJump = false;
+  bool _jumpPointsUp = true;
 
   final GlobalKey<YearTimelineState> _timelineKey =
       GlobalKey<YearTimelineState>();
@@ -132,6 +134,13 @@ class _FullscreenCalendarPageState extends State<FullscreenCalendarPage>
     if (t >= end) return 1.0;
     return (t - start) / (end - start);
   }
+
+  double get _panelPhaseValue {
+    final double eased = _phase(_railEase.value, 0.12, 1.0);
+    return Curves.easeOutCubic.transform(eased);
+  }
+
+  bool get _isPanelOpen => _panelPhaseValue > _panelEps;
 
   // ---- Quick Add handlers ----
   void _toggleFab() => _fabOpen ? _fabCtrl.reverse() : _fabCtrl.forward();
@@ -251,6 +260,8 @@ class _FullscreenCalendarPageState extends State<FullscreenCalendarPage>
   void _saveTaskEditorResult(tmodels.TaskEditorResult res) {
     // Choose a concrete day (store requires DateTime, not nullable).
     final DateTime placeOn = day.DayPlanStore.dateOnly(res.date ?? _selected);
+    final DateTime? reminderAnchor = res.date;
+    final DateTime? deadline = res.deadline;
 
     final task = day.Task(
       id: day.DayPlanStore.genId(),
@@ -258,30 +269,24 @@ class _FullscreenCalendarPageState extends State<FullscreenCalendarPage>
       repeatOnCompletion: res.repeatOnCompletion,
       checklist: res.checklist
           .map((tmodels.ChecklistEntry c) =>
-              day.TaskChecklistEntry(text: c.text, done: c.done))
+          day.TaskChecklistEntry(text: c.text, done: c.done))
           .toList(),
-      due: (res.hasDeadline && res.date != null) ? placeOn : null,
-      remindAt: (res.hasReminder && res.date != null)
-          ? DateTime(placeOn.year, placeOn.month, placeOn.day, 9, 0)
+      due: (res.hasDeadline && deadline != null)
+          ? day.DayPlanStore.dateOnly(deadline)
+          : null,
+      remindAt: (res.hasReminder && reminderAnchor != null)
+          ? DateTime(
+              reminderAnchor.year,
+              reminderAnchor.month,
+              reminderAnchor.day,
+              9,
+              0,
+            )
           : null,
       stats: res.stats, // multi-stat payload supported by your Task
     );
 
     day.DayPlanStore.I.addTask(placeOn, task);
-
-    // Optional: mirror a one-hour reminder block at 9am if hasReminder.
-    if (task.remindAt != null) {
-      day.DayPlanStore.I.addReminder(
-        placeOn,
-        day.Reminder(
-          id: day.DayPlanStore.genId(),
-          title: task.title,
-          groupId: 'task_${task.id}',
-          start: const TimeOfDay(hour: 9, minute: 0),
-          end: const TimeOfDay(hour: 10, minute: 0),
-        ),
-      );
-    }
 
     // Keep UI focused on the day we wrote to
     _selectFromPanel(placeOn);
@@ -328,7 +333,8 @@ class _FullscreenCalendarPageState extends State<FullscreenCalendarPage>
     );
   }
 
-  Widget _buildSidePillsOverlay(EdgeInsets viewPad) {
+  Widget _buildSidePillsOverlay(EdgeInsets viewPad, {required bool panelOpen}) {
+    if (panelOpen) return const SizedBox.shrink();
     return IgnorePointer(
       ignoring: !(_fabOpen || _dragActive),
       child: AnimatedBuilder(
@@ -589,6 +595,42 @@ class _FullscreenCalendarPageState extends State<FullscreenCalendarPage>
     if (active != _activeOverlay) setState(() => _activeOverlay = active);
   }
 
+  void _handleTimelineEdge(TimelineEdge edge) {
+    if (_yearTransitioning) return;
+    switch (edge) {
+      case TimelineEdge.start:
+        _shiftYear(-1, jumpToStart: false);
+        break;
+      case TimelineEdge.end:
+        _shiftYear(1, jumpToStart: true);
+        break;
+    }
+  }
+
+  void _shiftYear(int delta, {required bool jumpToStart}) {
+    final int targetYear = _year + delta;
+    final DateTime desired =
+        jumpToStart ? DateTime(targetYear, 1, 1) : DateTime(targetYear, 12, 31);
+    if (!_inRange(desired)) return;
+
+    setState(() {
+      _yearTransitioning = true;
+      _year = targetYear;
+      _selected = desired;
+      _activeOverlay =
+          _overlayLabelFor(DateTime(_selected.year, _selected.month, 1));
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _timelineKey.currentState?.scrollToDate(desired);
+      if (mounted) {
+        setState(() => _yearTransitioning = false);
+      } else {
+        _yearTransitioning = false;
+      }
+    });
+  }
+
   void _toggleRail() {
     if (_railCtrl.status == AnimationStatus.dismissed ||
         _railCtrl.status == AnimationStatus.reverse) {
@@ -604,7 +646,13 @@ class _FullscreenCalendarPageState extends State<FullscreenCalendarPage>
   void _onAnyScroll(ScrollMetrics m) {
     final now = DateTime.now();
     if (now.year != _year) {
-      if (_showJump) setState(() => _showJump = false);
+      final bool pointUp = _year > now.year;
+      if (!_showJump || _jumpPointsUp != pointUp) {
+        setState(() {
+          _showJump = true;
+          _jumpPointsUp = pointUp;
+        });
+      }
       return;
     }
 
@@ -623,11 +671,16 @@ class _FullscreenCalendarPageState extends State<FullscreenCalendarPage>
 
     // Small margin so it appears a bit before/after it leaves.
     const double margin = 24.0;
-    final offscreen = (todayBottom < visibleTop + margin) ||
-        (todayTop > visibleBottom - margin);
+    final bool above = todayBottom < visibleTop + margin;
+    final bool below = todayTop > visibleBottom - margin;
+    final bool offscreen = above || below;
+    final bool pointUp = above; // need to scroll upward to reach today
 
-    if (offscreen != _showJump) {
-      setState(() => _showJump = offscreen);
+    if (offscreen != _showJump || (offscreen && pointUp != _jumpPointsUp)) {
+      setState(() {
+        _showJump = offscreen;
+        if (offscreen) _jumpPointsUp = pointUp;
+      });
     }
   }
 
@@ -702,6 +755,7 @@ class _FullscreenCalendarPageState extends State<FullscreenCalendarPage>
         railProgress: 0.0,
         onPick: _openDayFromLane,
         onMonthOverlay: _onMonthOverlay,
+        onEdgeReached: _handleTimelineEdge,
       ),
     );
 
@@ -725,14 +779,20 @@ class _FullscreenCalendarPageState extends State<FullscreenCalendarPage>
 
       // FAB (now lifted via custom FAB location so taps work reliably)
       floatingActionButton: AnimatedBuilder(
-        animation: _revealCtrl,
-        builder: (_, __) => Opacity(
-          opacity: _revealOpacity.value,
-          child: IgnorePointer(
-            ignoring: _revealCtrl.isDismissed || _fabInteractive,
-            child: _buildCenterFab(),
-          ),
-        ),
+        animation: Listenable.merge([_revealCtrl, _railEase]),
+        builder: (_, __) {
+          final bool panelOpen = _isPanelOpen;
+          final double opacity = panelOpen ? 0.0 : _revealOpacity.value;
+          final bool ignoring =
+              panelOpen || _revealCtrl.isDismissed || _fabInteractive;
+          return Opacity(
+            opacity: opacity,
+            child: IgnorePointer(
+              ignoring: ignoring,
+              child: _buildCenterFab(),
+            ),
+          );
+        },
       ),
       floatingActionButtonLocation: _CenterFloatLifted(_fabLift),
 
@@ -948,8 +1008,10 @@ class _FullscreenCalendarPageState extends State<FullscreenCalendarPage>
                                       ),
                                     ],
                                   ),
-                                  child: const Icon(
-                                    Icons.keyboard_arrow_up_rounded,
+                                  child: Icon(
+                                    _jumpPointsUp
+                                        ? Icons.keyboard_arrow_up_rounded
+                                        : Icons.keyboard_arrow_down_rounded,
                                     color: Colors.white,
                                     size: 26,
                                   ),
@@ -962,7 +1024,7 @@ class _FullscreenCalendarPageState extends State<FullscreenCalendarPage>
                     ),
 
                     // Side pills overlay (raised with +)
-                    _buildSidePillsOverlay(pad),
+                    _buildSidePillsOverlay(pad, panelOpen: panelOpen),
 
                     // Close button
                     _buildCloseButton(pad),

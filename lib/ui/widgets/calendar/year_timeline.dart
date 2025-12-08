@@ -7,6 +7,11 @@ import 'package:kontinuum/ui/screens/day_detail_page.dart' as day;
 import 'package:kontinuum/ui/screens/task_editor_page.dart';
 import 'package:kontinuum/ui/screens/task_editor/models.dart'; // StatPick + TaskOptionsValue
 
+enum TimelineEdge {
+  start,
+  end,
+}
+
 /* --- Shared spacing so reminders and tasks align exactly --- */
 const double _kAccentW = 12; // width of the accent slot (pill/checkbox)
 const double _kAccentH = 22; // height of the accent slot
@@ -28,6 +33,7 @@ class YearTimeline extends StatefulWidget {
     required this.onMonthOverlay, // (current, next, t)
     required this.railProgress, // 0..1 amount faded (1 = fully faded)
     this.onTodayVisibilityChanged, // ← NEW
+    this.onEdgeReached,
   });
 
   final int year;
@@ -46,6 +52,9 @@ class YearTimeline extends StatefulWidget {
   /// Called whenever the visibility of **today** within the list changes.
   /// `true` = some part of today’s row is visible; `false` = fully off-screen.
   final ValueChanged<bool>? onTodayVisibilityChanged;
+
+  /// Optional: fire when user scrolls all the way to the top or bottom edge.
+  final ValueChanged<TimelineEdge>? onEdgeReached;
 
   @override
   YearTimelineState createState() => YearTimelineState();
@@ -71,6 +80,8 @@ class YearTimelineState extends State<YearTimeline> {
 
   // Throttle overlay computation to once-per-frame.
   bool _overlayScheduled = false;
+  bool _edgeTopArmed = false;
+  bool _edgeBottomArmed = false;
 
   bool _sameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
@@ -112,6 +123,8 @@ class YearTimelineState extends State<YearTimeline> {
       _dayKeys.clear();
       _monthKeys.clear();
       _didInitialScroll = false;
+      _edgeTopArmed = false;
+      _edgeBottomArmed = false;
     }
     if (!_sameDay(oldWidget.selected, widget.selected)) {
       _didInitialScroll = false;
@@ -149,7 +162,32 @@ class YearTimelineState extends State<YearTimeline> {
       if (!mounted) return;
       _emitOverlay();
       _updateTodayVisibilityAndNotify();
+      _checkEdgeTriggers();
     });
+  }
+
+  void _checkEdgeTriggers() {
+    final callback = widget.onEdgeReached;
+    if (callback == null) return;
+    if (!_scroll.hasClients) return;
+
+    const double threshold = 48.0;
+    final position = _scroll.position;
+    final double pixels = position.pixels;
+    final double min = position.minScrollExtent;
+    final double max = position.maxScrollExtent;
+
+    final bool nearTop = pixels <= min + threshold;
+    final bool nearBottom = pixels >= max - threshold;
+
+    if (nearTop != _edgeTopArmed) {
+      _edgeTopArmed = nearTop;
+      if (nearTop) callback(TimelineEdge.start);
+    }
+    if (nearBottom != _edgeBottomArmed) {
+      _edgeBottomArmed = nearBottom;
+      if (nearBottom) callback(TimelineEdge.end);
+    }
   }
 
   void _emitOverlay() {
@@ -283,6 +321,7 @@ class YearTimelineState extends State<YearTimeline> {
     final List<StatPick> picks = List<StatPick>.from(t.stats);
     return TaskOptionsValue(
       date: dayDate,
+      deadline: t.due == null ? null : day.DayPlanStore.dateOnly(t.due!),
       someday: false,
       repeatsDaily: t.repeatOnCompletion,
       hasReminder: t.remindAt != null,
@@ -291,6 +330,17 @@ class YearTimelineState extends State<YearTimeline> {
       statId: picks.isNotEmpty ? picks.first.id : null,
       statAmount: picks.isNotEmpty ? picks.first.amount : 1,
     );
+  }
+
+  List<ChecklistEntry> _checklistFromTask(day.Task t) {
+    return t.checklist
+        .map(
+          (entry) => ChecklistEntry(
+            text: entry.text,
+            done: entry.done,
+          ),
+        )
+        .toList();
   }
 
   @override
@@ -364,20 +414,64 @@ class YearTimelineState extends State<YearTimeline> {
                       t.id,
                       value,
                     ),
-                    onOpen: () {
-                      final opts = _optionsFromTask(
-                        t,
-                        DateTime(d.year, d.month, d.day),
-                      );
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
+                    onOpen: () async {
+                      final DateTime dayDate =
+                          DateTime(d.year, d.month, d.day);
+                      final opts = _optionsFromTask(t, dayDate);
+                      final checklist = _checklistFromTask(t);
+                      final res = await Navigator.of(context)
+                          .push<TaskEditorResult>(
+                        MaterialPageRoute<TaskEditorResult>(
                           builder: (_) => TaskEditorPage(
                             initialTitle: t.title,
                             autofocusTitle: false,
                             initialOptions: opts,
+                            initialChecklist: checklist,
+                            showDelete: true,
+                            onDelete: () {
+                              day.DayPlanStore.I.removeTask(dayDate, t.id);
+                              Navigator.of(context).pop();
+                            },
                           ),
                         ),
                       );
+                      if (res == null) return;
+
+                      final pickedDate = res.date;
+                      final deadline = res.deadline;
+                      final updated = t.copyWith(
+                        title: res.title,
+                        repeatOnCompletion: res.repeatOnCompletion,
+                        due: (res.hasDeadline && deadline != null)
+                            ? day.DayPlanStore.dateOnly(deadline)
+                            : null,
+                        remindAt: (res.hasReminder && pickedDate != null)
+                            ? DateTime(pickedDate.year, pickedDate.month,
+                                pickedDate.day, 9, 0)
+                            : null,
+                        checklist: res.checklist
+                            .map(
+                              (entry) => day.TaskChecklistEntry(
+                                text: entry.text,
+                                done: entry.done,
+                              ),
+                            )
+                            .toList(),
+                        stats: res.stats,
+                      );
+
+                      final DateTime newDay =
+                          day.DayPlanStore.dateOnly(res.date ?? dayDate);
+                      if (newDay != dayDate) {
+                        day.DayPlanStore.I.moveTask(
+                          dayDate,
+                          t.id,
+                          newDay,
+                          replaceWith: updated,
+                        );
+                      } else {
+                        day.DayPlanStore.I.replaceTask(dayDate, t.id, updated);
+                      }
                     },
                   ),
                 );

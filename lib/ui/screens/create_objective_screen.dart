@@ -643,7 +643,7 @@ class _CreateObjectiveScreenState extends State<CreateObjectiveScreen> {
                                                 _OptionSection.repetition),
                                             child: _buildRepetitionOptions(
                                               roundedBottom:
-                                                  !(showDescription),
+                                                  !showDescription,
                                             ),
                                           ),
                                           if (showDescription)
@@ -878,14 +878,10 @@ class _CreateObjectiveScreenState extends State<CreateObjectiveScreen> {
         return 'Standard';
       case ObjectiveType.tally:
         return 'Tally';
-      case ObjectiveType.writingPrompt:
-        return 'Writing prompt';
       case ObjectiveType.stopwatch:
         return 'Stopwatch';
       case ObjectiveType.subtask:
         return 'Subtask';
-      case ObjectiveType.reflective:
-        return 'Reflective';
       case ObjectiveType.abstinence:
         return 'Abstinence';
     }
@@ -1766,14 +1762,10 @@ class _CreateObjectiveScreenState extends State<CreateObjectiveScreen> {
         return 'Complete it once per period';
       case ObjectiveType.tally:
         return 'Count multiple completions';
-      case ObjectiveType.writingPrompt:
-        return 'Answer a recurring prompt';
       case ObjectiveType.stopwatch:
         return 'Track time spent';
       case ObjectiveType.subtask:
         return 'Break work into smaller tasks';
-      case ObjectiveType.reflective:
-        return 'Log a short reflection';
       case ObjectiveType.abstinence:
         return 'Avoid something (locks stats & target)';
     }

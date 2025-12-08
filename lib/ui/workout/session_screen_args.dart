@@ -9,11 +9,11 @@ class SessionScreenArgs {
   final String? attachToRoutineId;
   final int? focusedBlockIndex;
   final DateTime? scheduledDate;
+  final bool showResetButtonOnSessionScreen;
+  final String? invalidationReason;
 
   /// NEW: controls whether the SessionScreen should show the reset
   /// button in its action bar, or only show notes.
-  final bool showResetButtonOnSessionScreen;
-
   const SessionScreenArgs({
     this.routineId,
     this.workoutId,
@@ -23,8 +23,7 @@ class SessionScreenArgs {
     this.attachToRoutineId,
     this.focusedBlockIndex,
     this.scheduledDate,
-
-    /// NEW: default to false so the session screen shows NOTES by default.
     this.showResetButtonOnSessionScreen = false,
+    this.invalidationReason,
   });
 }

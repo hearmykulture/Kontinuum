@@ -6,6 +6,7 @@ import 'package:kontinuum/providers/objective_provider.dart';
 import 'package:kontinuum/models/objective.dart';
 import 'package:kontinuum/models/stat.dart';
 import 'package:kontinuum/data/stat_repository.dart';
+import 'package:kontinuum/ui/screens/create_objective_screen2.dart';
 
 class AddItemFab extends StatelessWidget {
   const AddItemFab({super.key});
@@ -117,6 +118,16 @@ class AddItemFab extends StatelessWidget {
                 _showNewObjectiveCard(context);
               },
             ),
+            const SizedBox(height: 10),
+            _MenuTile(
+              icon: Icons.auto_awesome,
+              title: "New Objective Revamp",
+              subtitle: "Preview the mission-style builder",
+              onTap: () {
+                Navigator.pop(context);
+                _openObjectiveRevamp(context);
+              },
+            ),
           ],
         ),
       ),
@@ -129,6 +140,21 @@ class AddItemFab extends StatelessWidget {
 
   void _showNewObjectiveCard(BuildContext context) {
     _showCardDialog<void>(context, child: const _NewObjectiveCard());
+  }
+
+  Future<void> _openObjectiveRevamp(BuildContext context) async {
+    final result = await Navigator.of(context).push<ObjectiveRevampResult>(
+      MaterialPageRoute<ObjectiveRevampResult>(
+        builder: (_) => const CreateObjectiveScreen2(),
+        fullscreenDialog: true,
+      ),
+    );
+    if (!context.mounted || result == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Objective "${result.title}" created'),
+      ),
+    );
   }
 }
 
@@ -674,13 +700,22 @@ class _NewObjectiveCardState extends State<_NewObjectiveCard> {
                             );
                             if (!mounted) return;
                             if (created != null) {
-                              // Register the counter entry so it can accrue; metadata lives in repository/seeders.
+                              final canonicalCategory =
+                                  created.categoryId.toUpperCase();
+                              StatRepository.upsert(
+                                StatMetadata(
+                                  id: created.id,
+                                  label: created.name,
+                                  categoryId: canonicalCategory,
+                                ),
+                              );
                               provider.registerStat(
                                 Stat(
                                   id: created.id,
                                   label: created.name,
                                   averageMinutesPerUnit: 1,
                                   repsForMastery: 1,
+                                  categoryId: canonicalCategory,
                                 ),
                               );
                               setState(() {
@@ -699,7 +734,7 @@ class _NewObjectiveCardState extends State<_NewObjectiveCard> {
 
               // Schedule
               const SizedBox(height: 16),
-              Align(
+              const Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
                   'Schedule',

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import 'package:kontinuum/providers/budget_provider.dart';
+import 'package:kontinuum/ui/screens/budget/models/budget_models.dart';
 
 class BudgetsPage extends StatelessWidget {
   const BudgetsPage({
@@ -275,7 +276,7 @@ class _BudgetTile extends StatelessWidget {
     const double kTitleSize = 16;
     const double kSubSize = 12;
 
-    final String period = 'Monthly';
+    final String period = labelForBudgetTimeSpan(budget.cadence);
     final String value = BudgetsPage._currency.format(budget.monthlyAmount);
 
     Widget roundedSquareIcon(IconData icon) {
@@ -378,7 +379,8 @@ class _BudgetTile extends StatelessWidget {
           ),
         ),
       ),
-      builder: (context, value, child) => Transform.scale(scale: value, child: child),
+      builder: (context, value, child) =>
+          Transform.scale(scale: value, child: child),
     );
   }
 }
@@ -457,7 +459,8 @@ class _AddBudgetTile extends StatelessWidget {
           ),
         ),
       ),
-      builder: (context, value, child) => Transform.scale(scale: value, child: child),
+      builder: (context, value, child) =>
+          Transform.scale(scale: value, child: child),
     );
   }
 }
@@ -653,8 +656,8 @@ class _FlashTextState extends State<_FlashText>
             final total = math.max(intensity, globalTail);
 
             final scale = 1 + (widget.peakScale - 1) * total;
-            final color =
-                Color.lerp(widget.color, Colors.white, widget.whiteMix * total)!;
+            final color = Color.lerp(
+                widget.color, Colors.white, widget.whiteMix * total)!;
             final glow = widget.maxGlow * total;
             final glowOpacity = (widget.glowOpacity * total).clamp(0.0, 1.0);
 

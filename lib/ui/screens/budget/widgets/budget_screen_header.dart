@@ -5,8 +5,8 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import 'package:kontinuum/providers/budget_provider.dart';
-import 'package:kontinuum/ui/screens/budget/models/budget_models.dart';
 import 'package:kontinuum/ui/screens/budget/budget_overview_screen.dart';
+import 'package:kontinuum/ui/screens/budget/models/budget_models.dart';
 import 'package:kontinuum/ui/widgets/year_progress_date.dart';
 import 'package:kontinuum/ui/theme/app_colors.dart';
 
@@ -21,7 +21,6 @@ class BudgetScreenWidget extends StatelessWidget {
 
     // Appearance
     this.accentColor = AppColors.accentBlue,
-    this.backgroundColor,
 
     // Carousel options
     this.carouselTwoRows = false,
@@ -59,7 +58,6 @@ class BudgetScreenWidget extends StatelessWidget {
   final ProgressForDay getProgressForDay;
   final ValueChanged<DateTime> onDateSelected;
   final Color accentColor;
-  final Color? backgroundColor;
 
   // Carousel inputs
   final bool carouselTwoRows;
@@ -95,7 +93,6 @@ class BudgetScreenWidget extends StatelessWidget {
           getProgressForDay: getProgressForDay,
           onDateSelected: onDateSelected,
           accentColor: accentColor,
-          backgroundColor: backgroundColor,
         ),
         Transform.translate(
           offset: Offset(0, carouselUnderlap),
@@ -462,7 +459,8 @@ class _CardBody extends StatelessWidget {
     final parent = context.findAncestorWidgetOfExactType<_BudgetCard>()!;
     final b = parent.budget;
     final formatter = NumberFormat.currency(symbol: '\$', decimalDigits: 2);
-    final amountText = formatter.format(b.monthlyAmount);
+    final amountText =
+        '${formatter.format(b.monthlyAmount)} / ${labelForBudgetTimeSpan(b.cadence)}';
     return _CardBody(
       title: b.title,
       subtitle: amountText,

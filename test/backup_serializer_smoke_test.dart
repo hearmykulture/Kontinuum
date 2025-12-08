@@ -96,6 +96,7 @@ void main() {
       statId: 'stat-1',
       date: DateTime.utc(2024, 1, 1),
       amount: 5,
+      objectiveId: 'obj-1',
     );
     final milestone = Milestone(
       statId: 'stat-1',

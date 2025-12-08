@@ -252,11 +252,22 @@ class RoutineDetailScreen extends StatelessWidget {
                     onStartWorkout: (workout) {
                       final prov = context.read<WorkoutProvider>();
 
-                      prov.startSession(
+                      final result = prov.startSession(
                         routineId: routine.id,
                         workoutId: workout.id,
                         source: 'routine_detail',
                       );
+                      if (!result.started) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              result.message ??
+                                  'Unable to start that workout session.',
+                            ),
+                          ),
+                        );
+                        return;
+                      }
 
                       Navigator.of(context).push(
                         MaterialPageRoute(

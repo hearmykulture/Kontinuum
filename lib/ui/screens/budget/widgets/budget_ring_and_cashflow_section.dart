@@ -1,8 +1,10 @@
 // lib/ui/screens/budget/widgets/budget_ring_and_cashflow_section.dart
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -10,50 +12,42 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:kontinuum/providers/budget_provider.dart';
 import 'package:kontinuum/services/bank_link_service.dart';
 import 'package:kontinuum/services/budget_boxes.dart';
+import 'package:kontinuum/services/transactions_store.dart';
 import 'package:kontinuum/models/budget_transaction.dart';
+import 'package:kontinuum/ui/screens/budget/budget_focus.dart';
 import 'package:kontinuum/ui/screens/budget/models/budget_models.dart';
 import 'package:kontinuum/ui/screens/budget/utils/recurring_schedule.dart'
     show
         RecurringInstance,
         buildUpcomingInstancesForSpan,
-        windowForBudgetTimeSpan;
+        windowForBudgetTimeSpan,
+        nextOccurrenceForExpense;
 import 'package:kontinuum/ui/screens/budget/widgets/budget_ring_chart.dart';
+import 'package:kontinuum/ui/widgets/mini_calendar_sheet.dart';
+import 'package:kontinuum/ui/widgets/corner_icons.dart';
 
 import '../budget_screen_theme.dart';
 import 'package:kontinuum/core/time/app_clock.dart';
 import 'package:kontinuum/ui/screens/budget/create_transaction_screen.dart';
 import 'package:kontinuum/ui/screens/budget/theme/budget_theme.dart';
 
-/* ───────────────────────── Budget Time Span ───────────────────────── */
-
-String labelForBudgetTimeSpan(BudgetTimeSpan span) {
-  switch (span) {
-    case BudgetTimeSpan.weekly:
-      return 'Weekly';
-    case BudgetTimeSpan.monthly:
-      return 'Monthly';
-    case BudgetTimeSpan.yearly:
-      return 'Yearly';
-    case BudgetTimeSpan.custom:
-      return 'Custom';
-  }
-}
-
 /* ───────────────────────── Helpers ───────────────────────── */
 
-/// Normalize recurring expenses to monthly cents, taking into account
-/// multiple weekly weekdays if configured.
-int normalizedMonthlyCents(RecurringExpense r) {
-  switch (r.cadence) {
-    case Recurrence.weekly:
-      // Assume 1 weekly occurrence per week if not specified
-      final countPerWeek = 1;
-      return ((r.amountCents * countPerWeek * 52) / 12).round();
-    case Recurrence.monthly:
-      return r.amountCents;
-    case Recurrence.yearly:
-      return (r.amountCents / 12).round();
-  }
+/// Normalize recurring expenses into the requested [targetSpan].
+int normalizedRecurringCents(
+  RecurringExpense r,
+  BudgetTimeSpan targetSpan,
+) {
+  final fromSpan = switch (r.cadence) {
+    Recurrence.weekly => BudgetTimeSpan.weekly,
+    Recurrence.monthly => BudgetTimeSpan.monthly,
+    Recurrence.yearly => BudgetTimeSpan.yearly,
+  };
+  return Budget.convertAmountBetweenSpans(
+    r.amountCents,
+    from: fromSpan,
+    to: targetSpan,
+  );
 }
 
 /// Shared helper: one horizontal row of chips that scrolls horizontally.
@@ -102,6 +96,9 @@ class BudgetRingSection extends StatefulWidget {
     required this.showStats,
     required this.onToggleStats,
     this.onTapAmount,
+    this.pageJumpSignal,
+    this.focusSignal,
+    this.billFocusSignal,
   });
 
   final String? selectedBudgetId;
@@ -115,6 +112,9 @@ class BudgetRingSection extends StatefulWidget {
 
   /// Called when user taps the ring amount label (to open edit/create).
   final VoidCallback? onTapAmount;
+  final ValueNotifier<int?>? pageJumpSignal;
+  final ValueNotifier<BudgetFocusTarget?>? focusSignal;
+  final ValueNotifier<BudgetBillFocus?>? billFocusSignal;
 
   @override
   State<BudgetRingSection> createState() => _BudgetRingSectionState();
@@ -128,6 +128,13 @@ class _BudgetRingSectionState extends State<BudgetRingSection> {
 
   late final PageController _pageController;
   int _currentPage = 0; // start on Bank balances
+  ValueNotifier<int?>? _pageJumpSignal;
+  ValueNotifier<BudgetFocusTarget?>? _focusSignal;
+  ValueNotifier<BudgetBillFocus?>? _billOpenSignal;
+  final GlobalKey _upcomingSectionKey = GlobalKey();
+  BudgetBillFocus? _pendingBillFocus;
+  List<_UpcomingBillItem> _lastUpcomingBills = <_UpcomingBillItem>[];
+  bool _billOpenScheduled = false;
 
   // Controls whether the CASH FLOW section is open or collapsed.
   bool _cashFlowExpanded = true;
@@ -143,16 +150,278 @@ class _BudgetRingSectionState extends State<BudgetRingSection> {
   // Controls whether the CATEGORIES dropdown is open or collapsed.
   bool _categoriesExpanded = false;
 
+  // Local dismissal/snooze state for Upcoming Bills.
+  final Set<String> _clearedUpcoming = <String>{};
+  final Map<String, DateTime> _snoozedUpcoming = <String, DateTime>{};
+
   @override
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: _currentPage);
+    _attachJumpListener();
+    _attachFocusListener();
+    _attachBillOpenListener();
+  }
+
+  @override
+  void didUpdateWidget(covariant BudgetRingSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.pageJumpSignal != widget.pageJumpSignal) {
+      _detachJumpListener();
+      _attachJumpListener();
+    }
+    if (oldWidget.focusSignal != widget.focusSignal) {
+      _detachFocusListener();
+      _attachFocusListener();
+    }
+    if (oldWidget.billFocusSignal != widget.billFocusSignal) {
+      _detachBillOpenListener();
+      _attachBillOpenListener();
+    }
   }
 
   @override
   void dispose() {
+    _detachJumpListener();
+    _detachFocusListener();
+    _detachBillOpenListener();
     _pageController.dispose();
     super.dispose();
+  }
+
+  void _attachJumpListener() {
+    _pageJumpSignal = widget.pageJumpSignal;
+    _pageJumpSignal?.addListener(_handleJumpRequest);
+    _handleJumpRequest();
+  }
+
+  void _detachJumpListener() {
+    _pageJumpSignal?.removeListener(_handleJumpRequest);
+    _pageJumpSignal = null;
+  }
+
+  void _handleJumpRequest() {
+    final signal = _pageJumpSignal;
+    if (signal == null) return;
+    final int? target = signal.value;
+    if (target == null) return;
+    final int clamped = target.clamp(0, _pageCount - 1);
+    if (_pageController.hasClients) {
+      _pageController.animateToPage(
+        clamped,
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeOutCubic,
+      );
+    }
+    if (mounted) {
+      setState(() => _currentPage = clamped);
+    } else {
+      _currentPage = clamped;
+    }
+    signal.value = null;
+  }
+
+  void _attachFocusListener() {
+    _focusSignal = widget.focusSignal;
+    _focusSignal?.addListener(_handleFocusRequest);
+    _handleFocusRequest();
+  }
+
+  void _detachFocusListener() {
+    _focusSignal?.removeListener(_handleFocusRequest);
+    _focusSignal = null;
+  }
+
+  void _handleFocusRequest() {
+    final signal = _focusSignal;
+    if (signal == null) return;
+    final BudgetFocusTarget? target = signal.value;
+    if (target == null) return;
+    switch (target) {
+      case BudgetFocusTarget.upcomingBills:
+        _expandUpcomingBills();
+        _scrollUpcomingIntoView();
+        break;
+    }
+    signal.value = null;
+  }
+
+  void _attachBillOpenListener() {
+    _billOpenSignal = widget.billFocusSignal;
+    _billOpenSignal?.addListener(_handleBillOpenRequest);
+    _handleBillOpenRequest();
+  }
+
+  void _detachBillOpenListener() {
+    _billOpenSignal?.removeListener(_handleBillOpenRequest);
+    _billOpenSignal = null;
+  }
+
+  void _handleBillOpenRequest() {
+    final signal = _billOpenSignal;
+    if (signal == null) return;
+    final BudgetBillFocus? focus = signal.value;
+    if (focus == null) return;
+    _pendingBillFocus = focus;
+    _expandUpcomingBills();
+    _scrollUpcomingIntoView();
+    _scheduleBillOpenAttempt();
+    signal.value = null;
+  }
+
+  void _scheduleBillOpenAttempt() {
+    if (_billOpenScheduled) return;
+    _billOpenScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _billOpenScheduled = false;
+      _tryOpenPendingBill();
+    });
+  }
+
+  void _tryOpenPendingBill() {
+    if (!mounted) return;
+    final focus = _pendingBillFocus;
+    if (focus == null) return;
+    if (_lastUpcomingBills.isEmpty) {
+      _showBudgetSnack('No upcoming bills to open');
+      _pendingBillFocus = null;
+      return;
+    }
+    final match = _pickUpcomingMatch(focus);
+    if (match == null) {
+      _showBudgetSnack('Could not find matching bill');
+      _pendingBillFocus = null;
+      return;
+    }
+    final index = _lastUpcomingBills.indexOf(match);
+    final heroTag = _heroTagForBill(match, index < 0 ? 0 : index);
+    _openUpcomingBillDetail(match, heroTag);
+    _pendingBillFocus = null;
+  }
+
+  void _openUpcomingBillDetail(_UpcomingBillItem item, String heroTag) {
+    _showUpcomingBillDetailPopup(
+      context: context,
+      item: item,
+      heroTag: heroTag,
+      onMarkPaid: _markUpcomingPaid,
+      onSnooze: _snoozeUpcoming,
+    );
+  }
+
+  void _showBudgetSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+      ),
+    );
+  }
+
+  _UpcomingBillItem? _pickUpcomingMatch(BudgetBillFocus focus) {
+    _UpcomingBillItem? best;
+    int bestScore = -1;
+
+    final String? nameNeedle = focus.name?.toLowerCase().trim();
+    final int? amountNeedle = focus.amountCents;
+    final DateTime? dueNeedle = focus.dueDate == null
+        ? null
+        : DateTime(
+            focus.dueDate!.year,
+            focus.dueDate!.month,
+            focus.dueDate!.day,
+          );
+
+    for (final item in _lastUpcomingBills) {
+      if (focus.billKey != null && focus.billKey == item.key) {
+        return item;
+      }
+
+      int score = 0;
+      final inst = item.instance;
+      final candidateName = inst.expense.name.toLowerCase();
+
+      if (nameNeedle != null && nameNeedle.isNotEmpty) {
+        if (candidateName == nameNeedle) {
+          score += 6;
+        } else if (candidateName.contains(nameNeedle) ||
+            nameNeedle.contains(candidateName)) {
+          score += 3;
+        }
+      }
+
+      if (amountNeedle != null) {
+        final diff = (inst.amountCents - amountNeedle).abs();
+        if (diff == 0) {
+          score += 4;
+        } else if (diff <= 100) {
+          score += 1;
+        }
+      }
+
+      if (dueNeedle != null) {
+        final dueDay = DateTime(
+          inst.dueDate.year,
+          inst.dueDate.month,
+          inst.dueDate.day,
+        );
+        final diffDays = (dueDay.difference(dueNeedle).inDays).abs();
+        if (diffDays == 0) {
+          score += 6;
+        } else if (diffDays <= 2) {
+          score += 2;
+        }
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = item;
+      }
+    }
+
+    if (bestScore <= 0) return null;
+    return best;
+  }
+
+  void _expandUpcomingBills() {
+    if (!_upcomingBillsExpanded) {
+      setState(() {
+        _upcomingBillsExpanded = true;
+      });
+    }
+  }
+
+  void _scrollUpcomingIntoView() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _upcomingSectionKey.currentContext;
+      if (ctx == null) return;
+      Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 420),
+        curve: Curves.easeOutCubic,
+        alignment: 0.08,
+      );
+    });
+  }
+
+  String _keyForUpcoming(RecurringInstance inst) {
+    final exp = inst.expense;
+    return '${exp.name}_${exp.amountCents}_${exp.cadence.name}_${inst.dueDate.millisecondsSinceEpoch}';
+  }
+
+  void _markUpcomingPaid(String key) {
+    setState(() {
+      _clearedUpcoming.add(key);
+      _snoozedUpcoming.remove(key);
+    });
+  }
+
+  void _snoozeUpcoming(String key, DateTime newDate) {
+    final normalized = DateTime(newDate.year, newDate.month, newDate.day);
+    setState(() {
+      _snoozedUpcoming[key] = normalized;
+      _clearedUpcoming.remove(key);
+    });
   }
 
   @override
@@ -160,15 +429,21 @@ class _BudgetRingSectionState extends State<BudgetRingSection> {
     final selectedBudgetId = widget.selectedBudgetId;
 
     // If nothing is selected, hide the whole section for now.
-    if (selectedBudgetId == null) return const SizedBox.shrink();
+    if (selectedBudgetId == null) {
+      _lastUpcomingBills = <_UpcomingBillItem>[];
+      return const SizedBox.shrink();
+    }
 
     final provider = context.watch<BudgetProvider>();
     final Budget? budget = provider.byId(selectedBudgetId);
-    if (budget == null) return const SizedBox.shrink();
+    if (budget == null) {
+      _lastUpcomingBills = <_UpcomingBillItem>[];
+      return const SizedBox.shrink();
+    }
 
     // Upcoming bills are driven from recurrence metadata.
     final now = AppClock.now();
-    final upcomingBills = buildUpcomingInstancesForSpan(
+    final rawUpcomingBills = buildUpcomingInstancesForSpan(
       budget.recurrings,
       span: _upcomingBillsSpan,
       anchor: now,
@@ -176,7 +451,32 @@ class _BudgetRingSectionState extends State<BudgetRingSection> {
       customEnd: _customSpanTo,
     );
 
-    final int totalCents = budget.monthlyAmount * 100;
+    final List<_UpcomingBillItem> upcomingBills = [];
+    for (final bill in rawUpcomingBills) {
+      final key = _keyForUpcoming(bill);
+      if (_clearedUpcoming.contains(key)) continue;
+      final snoozedDate = _snoozedUpcoming[key];
+      final inst = snoozedDate == null
+          ? bill
+          : RecurringInstance(expense: bill.expense, dueDate: snoozedDate);
+      upcomingBills.add(
+        _UpcomingBillItem(
+          instance: inst,
+          key: key,
+        ),
+      );
+    }
+    upcomingBills.sort((a, b) {
+      final cmp = a.instance.dueDate.compareTo(b.instance.dueDate);
+      if (cmp != 0) return cmp;
+      return a.instance.expense.name.compareTo(b.instance.expense.name);
+    });
+    _lastUpcomingBills = upcomingBills;
+    if (_pendingBillFocus != null) {
+      _scheduleBillOpenAttempt();
+    }
+
+    final int totalCents = budget.amountCentsForSpan(budget.cadence);
 
     // Sum per-category recurring spend (normalized to monthly).
     final Map<String, int> categoryTotals = <String, int>{};
@@ -187,13 +487,14 @@ class _BudgetRingSectionState extends State<BudgetRingSection> {
     int usedCents = 0;
     int uncategorizedCents = 0;
     for (final rec in budget.recurrings) {
-      final int monthlyRecCents = normalizedMonthlyCents(rec);
-      usedCents += monthlyRecCents;
+      final int normalizedCents = normalizedRecurringCents(rec, budget.cadence);
+      usedCents += normalizedCents;
       final cat = rec.category;
       if (cat == null) {
-        uncategorizedCents += monthlyRecCents;
+        uncategorizedCents += normalizedCents;
       } else {
-        categoryTotals[cat.name] = (categoryTotals[cat.name] ?? 0) + monthlyRecCents;
+        categoryTotals[cat.name] =
+            (categoryTotals[cat.name] ?? 0) + normalizedCents;
       }
     }
 
@@ -231,7 +532,7 @@ class _BudgetRingSectionState extends State<BudgetRingSection> {
 
     // Always add the remainder slice if any.
     if (remainderCents > 0) {
-      final Color unallocatedColor = Colors.white.withValues(alpha: (0.40));
+      final Color unallocatedColor = Colors.white.withValues(alpha: 0.40);
       values.add(remainderCents.toDouble());
       colors.add(unallocatedColor);
       legend.add(
@@ -247,7 +548,9 @@ class _BudgetRingSectionState extends State<BudgetRingSection> {
     if (values.isEmpty) return const SizedBox.shrink();
 
     final currencyFmt = NumberFormat.currency(symbol: '\$');
-    final String amountLabel = currencyFmt.format(budget.monthlyAmount);
+    final amountPerSpan = totalCents / 100.0;
+    final String amountLabel =
+        '${currencyFmt.format(amountPerSpan)} / ${labelForBudgetTimeSpan(budget.cadence)}';
 
     // Subtitle text based on current page
     String subtitle;
@@ -265,7 +568,7 @@ class _BudgetRingSectionState extends State<BudgetRingSection> {
     final bool showStats = widget.showStats;
 
     return Transform.translate(
-      offset: const Offset(0, -12),
+      offset: const Offset(0, -20),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -393,47 +696,57 @@ class _BudgetRingSectionState extends State<BudgetRingSection> {
           ),
           const SizedBox(height: 12),
 
-          // Upcoming Bills
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: _BudgetSectionPill(
-              label: 'Upcoming Bills',
-              expanded: _upcomingBillsExpanded,
-              onTap: () {
-                setState(() {
-                  _upcomingBillsExpanded = !_upcomingBillsExpanded;
-                });
-              },
+          KeyedSubtree(
+            key: _upcomingSectionKey,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: _BudgetSectionPill(
+                    label: 'Upcoming Bills',
+                    expanded: _upcomingBillsExpanded,
+                    onTap: () {
+                      setState(() {
+                        _upcomingBillsExpanded = !_upcomingBillsExpanded;
+                      });
+                    },
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: AnimatedCrossFade(
+                    firstChild: const SizedBox.shrink(),
+                    secondChild: Container(
+                      decoration: BoxDecoration(
+                        color: BudgetScreenTheme.buttonGreen,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildUpcomingSpanHeader(),
+                          const SizedBox(height: 8),
+                          _UpcomingBillsList(
+                            bills: upcomingBills,
+                            onMarkPaid: _markUpcomingPaid,
+                            onSnooze: _snoozeUpcoming,
+                          ),
+                        ],
+                      ),
+                    ),
+                    crossFadeState: _upcomingBillsExpanded
+                        ? CrossFadeState.showSecond
+                        : CrossFadeState.showFirst,
+                    duration: const Duration(milliseconds: 220),
+                    sizeCurve: Curves.easeInOut,
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
             ),
           ),
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: AnimatedCrossFade(
-              firstChild: const SizedBox.shrink(),
-              secondChild: Container(
-                decoration: BoxDecoration(
-                  color: BudgetScreenTheme.buttonGreen,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildUpcomingSpanHeader(),
-                    const SizedBox(height: 8),
-                    _UpcomingBillsList(bills: upcomingBills),
-                  ],
-                ),
-              ),
-              crossFadeState: _upcomingBillsExpanded
-                  ? CrossFadeState.showSecond
-                  : CrossFadeState.showFirst,
-              duration: const Duration(milliseconds: 220),
-              sizeCurve: Curves.easeInOut,
-            ),
-          ),
-          const SizedBox(height: 12),
 
           // Categories
           Padding(
@@ -588,25 +901,34 @@ class _BudgetRingSectionState extends State<BudgetRingSection> {
 ({IconData icon, Color color}) _flowIconStyle(String flow) {
   switch (flow) {
     case 'income':
-      return (icon: Icons.arrow_downward_rounded, color: const Color(0xFF4CD964));
+      return (
+        icon: Icons.arrow_downward_rounded,
+        color: const Color(0xFF4CD964)
+      );
     case 'expense':
       return (icon: Icons.arrow_upward_rounded, color: const Color(0xFFFF6B6B));
     case 'transfer':
       return (icon: Icons.swap_horiz_rounded, color: const Color(0xFF5AC8FA));
     default:
-      return (icon: Icons.account_balance_wallet_rounded, color: const Color(0xFF9BA5B3));
+      return (
+        icon: Icons.account_balance_wallet_rounded,
+        color: const Color(0xFF9BA5B3)
+      );
   }
 }
 
-Widget _transactionPill(BankTransaction t, {VoidCallback? onTap}) {
+Widget _transactionPill(
+  BankTransaction t, {
+  VoidCallback? onTap,
+  String? heroTag,
+}) {
   final title =
       t.merchant?.isNotEmpty == true ? t.merchant! : (t.name ?? 'Transaction');
   final category = t.category ??
       (t.categoryPath.isNotEmpty ? t.categoryPath.first : 'Uncategorized');
   final isExpense = t.isExpense;
   final amountAbs = t.amount.abs();
-  final amountFmt =
-      NumberFormat.currency(symbol: '\$').format(amountAbs);
+  final amountFmt = NumberFormat.currency(symbol: '\$').format(amountAbs);
   final flowLabel =
       (t.flow ?? (isExpense ? 'expense' : 'income')).toLowerCase();
   final isTransfer = flowLabel == 'transfer';
@@ -623,7 +945,7 @@ Widget _transactionPill(BankTransaction t, {VoidCallback? onTap}) {
   final iconData = flowIconStyle.icon;
   final iconColor = flowIconStyle.color;
 
-  final pill = Container(
+  Widget pill = Container(
     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
     decoration: BoxDecoration(
       color: themeColor,
@@ -711,7 +1033,36 @@ Widget _transactionPill(BankTransaction t, {VoidCallback? onTap}) {
     ),
   );
 
-  if (onTap == null) return pill;
+  if (heroTag != null) {
+    pill = Hero(
+      tag: heroTag,
+      flightShuttleBuilder: (
+        context,
+        animation,
+        direction,
+        fromCtx,
+        toCtx,
+      ) {
+        final Widget target = direction == HeroFlightDirection.push
+            ? toCtx.widget
+            : fromCtx.widget;
+        return FadeTransition(
+          opacity: animation.drive(
+            CurveTween(curve: Curves.easeInOutCubic),
+          ),
+          child: target,
+        );
+      },
+      child: Material(
+        color: Colors.transparent,
+        child: pill,
+      ),
+    );
+  }
+
+  if (onTap == null) {
+    return pill;
+  }
 
   return GestureDetector(
     behavior: HitTestBehavior.opaque,
@@ -743,7 +1094,26 @@ class _BankBalancesChartPageState extends State<_BankBalancesChartPage> {
   @override
   void initState() {
     super.initState();
-    _future = widget.bankLinkService.fetchBalances().catchError(
+    _future = widget.bankLinkService.fetchBalances().then(
+      (data) {
+        // Transform Map<String, dynamic> to record type
+        final accounts = data['accounts'];
+        bool hasAccounts = (data['hasAccounts'] as bool?) ?? false;
+        if (!hasAccounts && accounts is List && accounts.isNotEmpty) {
+          hasAccounts = true;
+        }
+        if (!hasAccounts) {
+          final total = (data['total'] as num?)?.toDouble();
+          if (total != null && total > 0) hasAccounts = true;
+        }
+        return (
+          checking: (data['checking'] as num?)?.toDouble() ?? 0.0,
+          currency: data['currency'] as String?,
+          hasAccounts: hasAccounts,
+          savings: (data['savings'] as num?)?.toDouble() ?? 0.0,
+        );
+      },
+    ).catchError(
       (error) {
         // Return default empty state if bank connection fails
         return (
@@ -847,49 +1217,6 @@ class _BankBalancesChartPageState extends State<_BankBalancesChartPage> {
 }
 
 /* ───────────────────────── Small ring UI bits ───────────────────────── */
-
-class _StatsToggleButton extends StatelessWidget {
-  const _StatsToggleButton({
-    required this.active,
-    required this.onTap,
-  });
-
-  final bool active;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final Color border = Colors.white.withValues(
-      alpha: active ? 0.9 : 0.45,
-    ); // thin circle outline
-    final Color bg =
-        active ? Colors.white.withValues(alpha: 0.08) : Colors.transparent;
-    final Color iconColor = Colors.white.withValues(alpha: 0.9);
-
-    return Semantics(
-      label: 'Toggle stats view',
-      button: true,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
-        child: Container(
-          width: 32,
-          height: 32,
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: border, width: 1.2),
-          ),
-          child: Icon(
-            Icons.show_chart_rounded,
-            size: 18,
-            color: iconColor,
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 class _ChartTitlePill extends StatelessWidget {
   const _ChartTitlePill({required this.text});
@@ -1026,14 +1353,55 @@ class _BudgetSectionPill extends StatelessWidget {
 }
 
 /// Data-driven Upcoming Bills list powered by recurrence helper.
-class _UpcomingBillsList extends StatelessWidget {
-  const _UpcomingBillsList({required this.bills});
+class _UpcomingBillItem {
+  _UpcomingBillItem({required this.instance, required this.key});
 
-  final List<RecurringInstance> bills;
+  final RecurringInstance instance;
+  final String key;
+}
+
+String _heroTagForBill(_UpcomingBillItem item, int index) {
+  final inst = item.instance;
+  return 'upcoming_bill_${item.key}_${inst.dueDate.millisecondsSinceEpoch}_${inst.expense.amountCents}_$index';
+}
+
+Future<void> _showUpcomingBillDetailPopup({
+  required BuildContext context,
+  required _UpcomingBillItem item,
+  required String heroTag,
+  required ValueChanged<String> onMarkPaid,
+  required void Function(String key, DateTime newDate) onSnooze,
+}) {
+  HapticFeedback.selectionClick();
+  return Navigator.of(context).push(
+    PageRouteBuilder<void>(
+      opaque: false,
+      transitionDuration: const Duration(milliseconds: 420),
+      reverseTransitionDuration: const Duration(milliseconds: 360),
+      pageBuilder: (_, __, ___) => UpcomingBillDetailPopup(
+        bill: item.instance,
+        billKey: item.key,
+        heroTag: heroTag,
+        onMarkPaid: onMarkPaid,
+        onSnooze: onSnooze,
+      ),
+    ),
+  );
+}
+
+class _UpcomingBillsList extends StatelessWidget {
+  const _UpcomingBillsList({
+    required this.bills,
+    required this.onMarkPaid,
+    required this.onSnooze,
+  });
+
+  final List<_UpcomingBillItem> bills;
+  final ValueChanged<String> onMarkPaid;
+  final void Function(String key, DateTime newDate) onSnooze;
 
   @override
   Widget build(BuildContext context) {
-    // Match the Cash Flow transaction container background.
     final themeColor = BudgetScreenTheme.buttonGreen;
     final borderColor = Colors.white.withValues(alpha: 0.08);
     final dateFmt = DateFormat('EEE, MMM d');
@@ -1076,7 +1444,7 @@ class _UpcomingBillsList extends StatelessWidget {
       );
     }
 
-    final sorted = [...bills]..sort((a, b) => a.dueDate.compareTo(b.dueDate));
+    final sorted = [...bills];
     final amountFmt = NumberFormat.currency(symbol: '\$');
 
     return Column(
@@ -1084,85 +1452,1128 @@ class _UpcomingBillsList extends StatelessWidget {
       children: [
         for (int i = 0; i < sorted.length; i++) ...[
           Builder(builder: (_) {
-            final bill = sorted[i];
+            final item = sorted[i];
+            final bill = item.instance;
             final r = bill.expense;
             final dateLabel = dateFmt.format(bill.dueDate);
             final rel = relative(bill.dueDate);
             final amountText = amountFmt.format(r.amountCents / 100.0);
             final iconColor = r.color;
             final iconData = r.icon;
+            final heroTag = _heroTagForBill(item, i);
+
+            Widget card = Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: themeColor,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: borderColor, width: 1),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: iconColor.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    alignment: Alignment.center,
+                    child: Icon(
+                      iconData,
+                      color: iconColor,
+                      size: 22,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          r.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '$dateLabel • $rel',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    amountText,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            );
+
+            card = Hero(
+              tag: heroTag,
+              flightShuttleBuilder: (
+                context,
+                animation,
+                direction,
+                fromCtx,
+                toCtx,
+              ) {
+                final Widget target = direction == HeroFlightDirection.push
+                    ? toCtx.widget
+                    : fromCtx.widget;
+                return FadeTransition(
+                  opacity: animation.drive(
+                    CurveTween(curve: Curves.easeInOutCubic),
+                  ),
+                  child: target,
+                );
+              },
+              child: Material(
+                color: Colors.transparent,
+                child: card,
+              ),
+            );
 
             return Padding(
               padding: EdgeInsets.only(bottom: i == sorted.length - 1 ? 0 : 8),
-              child: Container(
-                width: double.infinity,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(
-                  color: themeColor,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: borderColor, width: 1),
+              child: GestureDetector(
+                onTap: () => _showUpcomingBillDetailPopup(
+                  context: context,
+                  item: item,
+                  heroTag: heroTag,
+                  onMarkPaid: onMarkPaid,
+                  onSnooze: onSnooze,
                 ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Container(
-                      width: 40,
-                      height: 40,
+                child: card,
+              ),
+            );
+          }),
+        ],
+      ],
+    );
+  }
+}
+
+class UpcomingBillDetailPopup extends StatefulWidget {
+  const UpcomingBillDetailPopup({
+    super.key,
+    required this.bill,
+    required this.billKey,
+    required this.heroTag,
+    this.onMarkPaid,
+    this.onSnooze,
+  });
+
+  final RecurringInstance bill;
+  final String billKey;
+  final String heroTag;
+  final ValueChanged<String>? onMarkPaid;
+  final void Function(String key, DateTime newDate)? onSnooze;
+
+  @override
+  State<UpcomingBillDetailPopup> createState() =>
+      _UpcomingBillDetailPopupState();
+}
+
+class _UpcomingBillDetailPopupState extends State<UpcomingBillDetailPopup> {
+  static const Duration _kRouteReverseDuration = Duration(milliseconds: 360);
+  static const Duration _kSuccessTransitionDuration =
+      Duration(milliseconds: 220);
+  static const Duration _kSuccessHoldDuration = Duration(milliseconds: 280);
+
+  bool _isClosing = false;
+  bool _showingSuccess = false;
+
+  Future<void> _close({
+    VoidCallback? afterPop,
+    bool waitForPopAnimation = false,
+  }) async {
+    if (_isClosing) return;
+    _isClosing = true;
+    try {
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+      if (afterPop != null) {
+        if (waitForPopAnimation) {
+          await Future<void>.delayed(_kRouteReverseDuration);
+        }
+        afterPop();
+      }
+    } finally {
+      _isClosing = false;
+    }
+  }
+
+  Future<void> _handleMarkPaid() async {
+    if (_showingSuccess) return;
+    setState(() => _showingSuccess = true);
+    await Future<void>.delayed(
+      _kSuccessTransitionDuration + _kSuccessHoldDuration,
+    );
+    await _close(
+      afterPop: () => widget.onMarkPaid?.call(widget.billKey),
+      waitForPopAnimation: true,
+    );
+  }
+
+  Future<void> _handleSnooze() async {
+    final now = AppClock.now();
+    final current = widget.bill.dueDate;
+    DateTime? picked;
+    await MiniCalendarSheet.show(
+      context,
+      initialDate: current,
+      firstDate: DateTime(now.year - 1, now.month, now.day),
+      lastDate: DateTime(now.year + 2, now.month, now.day),
+      onSelected: (d) => picked = d,
+    );
+    if (picked != null) {
+      widget.onSnooze?.call(widget.billKey, picked!);
+      await _close();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bill = widget.bill;
+    final expense = bill.expense;
+    final amountFmt = NumberFormat.currency(symbol: '\$');
+    final amountText = amountFmt.format(expense.amountCents / 100.0);
+    final dateFmt = DateFormat('EEEE, MMM d, y');
+    final relativeFmt = DateFormat('EEE, MMM d');
+    final dueDateLabel = dateFmt.format(bill.dueDate);
+    final now = AppClock.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final relative = _relativeDescription(bill.dueDate, today, relativeFmt);
+    final recurrenceLabel = labelForRecurrence(expense.cadence);
+    final nextDate = nextOccurrenceForExpense(
+      expense,
+      bill.dueDate.add(const Duration(days: 1)),
+    );
+
+    return WillPopScope(
+      onWillPop: () async {
+        await _close();
+        return false;
+      },
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: Stack(
+          children: [
+            GestureDetector(
+              onTap: _close,
+              child: BackdropFilter(
+                filter: ui.ImageFilter.blur(
+                  sigmaX: 8,
+                  sigmaY: 8,
+                ),
+                child: Container(
+                  color: Colors.black.withOpacity(0.65),
+                ),
+              ),
+            ),
+            Center(
+              child: Hero(
+                tag: widget.heroTag,
+                child: Material(
+                  color: Colors.transparent,
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 32),
+                    child: Container(
+                      constraints: const BoxConstraints(
+                        maxWidth: 480,
+                      ),
+                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
                       decoration: BoxDecoration(
-                        color: iconColor.withValues(alpha: 0.18),
-                        borderRadius: BorderRadius.circular(12),
+                        color: BudgetScreenTheme.buttonGreen,
+                        borderRadius: BorderRadius.circular(22),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.12),
+                          width: 1,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.5),
+                            blurRadius: 20,
+                            offset: const Offset(0, 10),
+                          ),
+                        ],
                       ),
-                      alignment: Alignment.center,
-                      child: Icon(
-                        iconData,
-                        color: iconColor,
-                        size: 22,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                      child: Stack(
+                        clipBehavior: Clip.none,
                         children: [
-                          Text(
-                            r.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
+                          CornerIcons(
+                            top: -16,
+                            leftIcon: Icons.delete_outline,
+                            onLeftPressed:
+                                _showingSuccess ? null : _handleMarkPaid,
+                            leftTooltip: 'Mark as paid',
+                            rightIcon: Icons.close,
+                            onRightPressed: _showingSuccess ? null : _close,
+                            rightTooltip: 'Close',
+                            leftIconColor: Colors.redAccent,
+                            rightIconColor: Colors.white70,
+                            horizontalInset: -8,
+                          ),
+                          AnimatedOpacity(
+                            opacity: _showingSuccess ? 0.0 : 1.0,
+                            duration: _kSuccessTransitionDuration,
+                            curve: Curves.easeOutCubic,
+                            child: IgnorePointer(
+                              ignoring: _showingSuccess,
+                              child: Padding(
+                                padding: const EdgeInsets.only(top: 36),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.center,
+                                      children: [
+                                        Container(
+                                          width: 54,
+                                          height: 54,
+                                          decoration: BoxDecoration(
+                                            color: expense.color
+                                                .withValues(alpha: 0.18),
+                                            borderRadius:
+                                                BorderRadius.circular(16),
+                                          ),
+                                          alignment: Alignment.center,
+                                          child: Icon(
+                                            expense.icon,
+                                            color: expense.color,
+                                            size: 28,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 16),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                expense.name,
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 18,
+                                                  fontWeight: FontWeight.w800,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                recurrenceLabel.toUpperCase(),
+                                                style: TextStyle(
+                                                  color: Colors.white
+                                                      .withValues(alpha: 0.7),
+                                                  fontSize: 11,
+                                                  letterSpacing: 1.1,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 18),
+                                    Text(
+                                      amountText,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 32,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 12),
+                                    _DetailRow(
+                                      label: 'Due date',
+                                      value: dueDateLabel,
+                                      helper: relative,
+                                    ),
+                                    const SizedBox(height: 10),
+                                    if (expense.category != null)
+                                      _DetailRow(
+                                        label: 'Category',
+                                        value: expense.category!.name,
+                                        leading: Container(
+                                          width: 12,
+                                          height: 12,
+                                          decoration: BoxDecoration(
+                                            color: expense.category!.color,
+                                            shape: BoxShape.circle,
+                                          ),
+                                        ),
+                                      )
+                                    else
+                                      const _DetailRow(
+                                        label: 'Category',
+                                        value: 'Uncategorized',
+                                      ),
+                                    const SizedBox(height: 10),
+                                    _DetailRow(
+                                      label: 'Cadence',
+                                      value: recurrenceLabel,
+                                      helper: _scheduleDetail(expense),
+                                    ),
+                                    if (nextDate != null) ...[
+                                      const SizedBox(height: 10),
+                                      _DetailRow(
+                                        label: 'Next after this',
+                                        value: dateFmt.format(nextDate),
+                                      ),
+                                    ],
+                                    const SizedBox(height: 18),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: _ActionPill(
+                                            label: 'Mark as paid',
+                                            onTap: _handleMarkPaid,
+                                            fillColor: Colors.white
+                                                .withValues(alpha: 0.08),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: _ActionPill(
+                                            label: 'Snooze',
+                                            onTap: _handleSnooze,
+                                            fillColor: Colors.white
+                                                .withValues(alpha: 0.06),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ),
                           ),
-                          const SizedBox(height: 2),
-                          Text(
-                            '$dateLabel • $rel',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 11,
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              ignoring: true,
+                              child: Center(
+                                child: AnimatedOpacity(
+                                  opacity: _showingSuccess ? 1.0 : 0.0,
+                                  duration: _kSuccessTransitionDuration,
+                                  curve: Curves.easeOutCubic,
+                                  child: AnimatedScale(
+                                    scale: _showingSuccess ? 1.0 : 0.82,
+                                    duration: _kSuccessTransitionDuration,
+                                    curve: Curves.easeOutBack,
+                                    child: Container(
+                                      width: 82,
+                                      height: 82,
+                                      decoration: BoxDecoration(
+                                        color: Colors.white
+                                            .withValues(alpha: 0.08),
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                          color: Colors.white
+                                              .withValues(alpha: 0.25),
+                                          width: 2,
+                                        ),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color:
+                                                Colors.black.withOpacity(0.4),
+                                            blurRadius: 18,
+                                            offset: const Offset(0, 8),
+                                          ),
+                                        ],
+                                      ),
+                                      alignment: Alignment.center,
+                                      child: const Icon(
+                                        Icons.check_rounded,
+                                        color: Colors.white,
+                                        size: 40,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
                             ),
                           ),
                         ],
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    Text(
-                      amountText,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
-            );
-          }),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _relativeDescription(
+    DateTime due,
+    DateTime today,
+    DateFormat fallbackFmt,
+  ) {
+    final dueDay = DateTime(due.year, due.month, due.day);
+    final diff = dueDay.difference(today).inDays;
+    if (diff == 0) return 'Today';
+    if (diff == 1) return 'Tomorrow';
+    if (diff > 1 && diff <= 7) return 'In $diff days';
+    if (diff == -1) return 'Yesterday';
+    if (diff < -1 && diff >= -7) return '${-diff} days ago';
+    return fallbackFmt.format(due);
+  }
+
+  static String _scheduleDetail(RecurringExpense expense) {
+    switch (expense.cadence) {
+      case Recurrence.weekly:
+        if (expense.weeklyWeekdays.isEmpty) return 'Weekly';
+        final days = expense.weeklyWeekdays.toList()..sort();
+        final names = days.map(_weekdayName).join(', ');
+        return 'Weekly on $names';
+      case Recurrence.monthly:
+        return 'Monthly on day ${expense.monthlyDay}';
+      case Recurrence.yearly:
+        final date = DateTime(2000, expense.yearlyMonth, expense.yearlyDay);
+        final fmt = DateFormat.MMMMd();
+        return 'Yearly on ${fmt.format(date)}';
+    }
+  }
+
+  static String _weekdayName(int weekday) {
+    const names = [
+      'Mon',
+      'Tue',
+      'Wed',
+      'Thu',
+      'Fri',
+      'Sat',
+      'Sun',
+    ];
+    if (weekday < 1 || weekday > 7) return 'Day $weekday';
+    return names[weekday - 1];
+  }
+}
+
+enum _TxnDeleteResult { deleted, notFound, unavailable }
+
+class TransactionDetailPopup extends StatefulWidget {
+  const TransactionDetailPopup({
+    super.key,
+    required this.transaction,
+    required this.heroTag,
+    this.onEdit,
+    this.onDeleted,
+  });
+
+  final BankTransaction transaction;
+  final String heroTag;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDeleted;
+
+  @override
+  State<TransactionDetailPopup> createState() => _TransactionDetailPopupState();
+}
+
+class _TransactionDetailPopupState extends State<TransactionDetailPopup> {
+  static const Duration _kRouteReverseDuration = Duration(milliseconds: 360);
+  static const Duration _kSuccessTransitionDuration =
+      Duration(milliseconds: 220);
+  static const Duration _kSuccessHoldDuration = Duration(milliseconds: 280);
+
+  bool _isClosing = false;
+  bool _showingSuccess = false;
+  bool _isDeleting = false;
+
+  Future<void> _close({
+    VoidCallback? afterPop,
+    bool waitForPopAnimation = false,
+  }) async {
+    if (_isClosing) return;
+    _isClosing = true;
+    try {
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+      if (afterPop != null) {
+        if (waitForPopAnimation) {
+          await Future<void>.delayed(_kRouteReverseDuration);
+        }
+        afterPop();
+      }
+    } finally {
+      _isClosing = false;
+    }
+  }
+
+  Future<void> _handleEdit({bool playSuccess = true}) async {
+    if (_showingSuccess) return;
+    if (!playSuccess) {
+      await _close(
+        afterPop: widget.onEdit,
+        waitForPopAnimation: true,
+      );
+      return;
+    }
+    setState(() => _showingSuccess = true);
+    await Future<void>.delayed(
+      _kSuccessTransitionDuration + _kSuccessHoldDuration,
+    );
+    await _close(
+      afterPop: widget.onEdit,
+      waitForPopAnimation: true,
+    );
+  }
+
+  Future<void> _handleDelete() async {
+    if (_isDeleting || _showingSuccess) return;
+    setState(() => _isDeleting = true);
+    try {
+      final result = await _deleteTransactionFromStore();
+      if (!mounted) return;
+      switch (result) {
+        case _TxnDeleteResult.deleted:
+          _showSnack('Transaction deleted');
+          await _close(afterPop: widget.onDeleted);
+          break;
+        case _TxnDeleteResult.notFound:
+        case _TxnDeleteResult.unavailable:
+          _showSnack('Unable to delete this transaction.');
+          break;
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isDeleting = false);
+      }
+    }
+  }
+
+  Future<_TxnDeleteResult> _deleteTransactionFromStore() async {
+    final txnId = widget.transaction.id;
+    try {
+      if (!Hive.isBoxOpen(BudgetBoxes.txBoxName)) {
+        await TransactionsStore.rememberRemovedTransactionId(txnId);
+        return _TxnDeleteResult.deleted;
+      }
+      final box = BudgetBoxes.tx;
+      final keys = box.keys.toList(growable: false);
+      final vals = box.values.toList(growable: false);
+      for (var i = 0; i < vals.length; i++) {
+        final entry = vals[i];
+        if (entry.id == widget.transaction.id) {
+          if (entry.manual) {
+            await box.delete(keys[i]);
+          } else {
+            final removed = entry.copyWith(status: 'removed', reviewed: true);
+            await box.put(keys[i], removed);
+          }
+          await TransactionsStore.rememberRemovedTransactionId(txnId);
+          return _TxnDeleteResult.deleted;
+        }
+      }
+      await TransactionsStore.rememberRemovedTransactionId(txnId);
+      return _TxnDeleteResult.deleted;
+    } catch (e, st) {
+      debugPrint('Failed to delete transaction $txnId: $e\n$st');
+      try {
+        await TransactionsStore.rememberRemovedTransactionId(txnId);
+        return _TxnDeleteResult.deleted;
+      } catch (_) {
+        return _TxnDeleteResult.unavailable;
+      }
+    }
+  }
+
+  void _showSnack(String message) {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger?.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final txn = widget.transaction;
+    final title = txn.merchant?.isNotEmpty == true
+        ? txn.merchant!
+        : (txn.name?.isNotEmpty == true ? txn.name! : 'Transaction');
+    final category = txn.category ??
+        (txn.categoryPath.isNotEmpty
+            ? txn.categoryPath.first
+            : 'Uncategorized');
+    final flowLabel =
+        (txn.flow ?? (txn.isExpense ? 'expense' : 'income')).toLowerCase();
+    final flowIconStyle = _flowIconStyle(flowLabel);
+    final icon = flowIconStyle.icon;
+    final iconColor = flowIconStyle.color;
+    final amountFmt = NumberFormat.currency(symbol: txn.currency ?? '\$');
+    final amountAbs = txn.amount.abs();
+    final bool isTransfer = flowLabel == 'transfer';
+    final String amountText = isTransfer
+        ? amountFmt.format(amountAbs)
+        : (txn.isExpense
+            ? '-${amountFmt.format(amountAbs)}'
+            : '+${amountFmt.format(amountAbs)}');
+    final Color amountColor = isTransfer
+        ? Colors.white
+        : (txn.isExpense ? Colors.red.shade300 : Colors.green.shade300);
+    final date = txn.date;
+    final now = AppClock.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final dateFmt = DateFormat('EEEE, MMM d, y • h:mm a');
+    final relFmt = DateFormat('EEE, MMM d');
+    final String dateLabel =
+        date != null ? dateFmt.format(date) : 'Date unavailable';
+    final String relative = date != null
+        ? _UpcomingBillDetailPopupState._relativeDescription(
+            date,
+            today,
+            relFmt,
+          )
+        : 'Unknown';
+    final status = txn.status.trim().isEmpty ? 'Unknown' : txn.status;
+    final statusLabel = _titleCase(status);
+    final bool isPending = status.toLowerCase() == 'pending';
+    final bool isManual = status.toLowerCase() == 'manual';
+    final String accountLabel =
+        txn.accountName ?? (txn.accountType?.toUpperCase() ?? 'Linked account');
+    String helperFlow;
+    switch (flowLabel) {
+      case 'income':
+        helperFlow = 'Money received';
+        break;
+      case 'expense':
+        helperFlow = 'Money spent';
+        break;
+      case 'transfer':
+        helperFlow = 'Transfer between accounts';
+        break;
+      default:
+        helperFlow = 'Transaction flow';
+    }
+    final pendingId = txn.pendingTransactionId;
+
+    return WillPopScope(
+      onWillPop: () async {
+        await _close();
+        return false;
+      },
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: Stack(
+          children: [
+            GestureDetector(
+              onTap: _close,
+              child: BackdropFilter(
+                filter: ui.ImageFilter.blur(
+                  sigmaX: 8,
+                  sigmaY: 8,
+                ),
+                child: Container(
+                  color: Colors.black.withOpacity(0.65),
+                ),
+              ),
+            ),
+            Center(
+              child: Hero(
+                tag: widget.heroTag,
+                child: Material(
+                  color: Colors.transparent,
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 32),
+                    child: Container(
+                      constraints: const BoxConstraints(
+                        maxWidth: 480,
+                      ),
+                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+                      decoration: BoxDecoration(
+                        color: BudgetScreenTheme.buttonGreen,
+                        borderRadius: BorderRadius.circular(22),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.12),
+                          width: 1,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.5),
+                            blurRadius: 20,
+                            offset: const Offset(0, 10),
+                          ),
+                        ],
+                      ),
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          CornerIcons(
+                            top: -16,
+                            leftIcon: Icons.delete_outline,
+                            onLeftPressed: _showingSuccess || _isDeleting
+                                ? null
+                                : _handleDelete,
+                            leftTooltip: 'Delete transaction',
+                            rightIcon: Icons.close,
+                            onRightPressed: _showingSuccess ? null : _close,
+                            rightTooltip: 'Close',
+                            leftIconColor: Colors.redAccent,
+                            rightIconColor: Colors.white70,
+                            horizontalInset: -8,
+                          ),
+                          AnimatedOpacity(
+                            opacity: _showingSuccess ? 0.0 : 1.0,
+                            duration: _kSuccessTransitionDuration,
+                            curve: Curves.easeOutCubic,
+                            child: IgnorePointer(
+                              ignoring: _showingSuccess,
+                              child: Padding(
+                                padding: const EdgeInsets.only(top: 36),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.center,
+                                      children: [
+                                        Container(
+                                          width: 54,
+                                          height: 54,
+                                          decoration: BoxDecoration(
+                                            color: iconColor.withValues(
+                                                alpha: 0.18),
+                                            borderRadius:
+                                                BorderRadius.circular(16),
+                                          ),
+                                          alignment: Alignment.center,
+                                          child: Icon(
+                                            icon,
+                                            color: iconColor,
+                                            size: 28,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 16),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                title,
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 18,
+                                                  fontWeight: FontWeight.w800,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                flowLabel.toUpperCase(),
+                                                style: TextStyle(
+                                                  color: Colors.white
+                                                      .withValues(alpha: 0.7),
+                                                  fontSize: 11,
+                                                  letterSpacing: 1.1,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.center,
+                                      children: [
+                                        Text(
+                                          amountText,
+                                          style: TextStyle(
+                                            color: amountColor,
+                                            fontSize: 32,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        if (isPending)
+                                          _transactionBadge(
+                                            'Pending',
+                                            Colors.yellow.shade800,
+                                          ),
+                                        if (isManual) ...[
+                                          if (!isPending)
+                                            const SizedBox(width: 6),
+                                          _transactionBadge(
+                                            'Manual',
+                                            const Color(0xFF3A5366),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                    const SizedBox(height: 14),
+                                    _DetailRow(
+                                      label: 'Status',
+                                      value: statusLabel,
+                                      helper: isPending
+                                          ? 'Waiting to post'
+                                          : 'Posted',
+                                    ),
+                                    const SizedBox(height: 10),
+                                    _DetailRow(
+                                      label: 'Date',
+                                      value: dateLabel,
+                                      helper: relative,
+                                    ),
+                                    const SizedBox(height: 10),
+                                    _DetailRow(
+                                      label: 'Account',
+                                      value: accountLabel,
+                                    ),
+                                    const SizedBox(height: 10),
+                                    _DetailRow(
+                                      label: 'Category',
+                                      value: category,
+                                    ),
+                                    const SizedBox(height: 10),
+                                    _DetailRow(
+                                      label: 'Flow',
+                                      value: flowLabel.toUpperCase(),
+                                      helper: helperFlow,
+                                    ),
+                                    if (pendingId != null &&
+                                        pendingId.isNotEmpty) ...[
+                                      const SizedBox(height: 10),
+                                      _DetailRow(
+                                        label: 'Pending ID',
+                                        value: pendingId,
+                                      ),
+                                    ],
+                                    const SizedBox(height: 10),
+                                    _DetailRow(
+                                      label: 'Transaction ID',
+                                      value: txn.id,
+                                    ),
+                                    const SizedBox(height: 18),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: _ActionPill(
+                                            label: 'Edit',
+                                            onTap: () =>
+                                                _handleEdit(playSuccess: false),
+                                            fillColor: Colors.white
+                                                .withValues(alpha: 0.08),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: _ActionPill(
+                                            label: 'Close',
+                                            onTap: () {
+                                              _close();
+                                            },
+                                            fillColor: Colors.white
+                                                .withValues(alpha: 0.06),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              ignoring: true,
+                              child: Center(
+                                child: AnimatedOpacity(
+                                  opacity: _showingSuccess ? 1.0 : 0.0,
+                                  duration: _kSuccessTransitionDuration,
+                                  curve: Curves.easeOutCubic,
+                                  child: AnimatedScale(
+                                    scale: _showingSuccess ? 1.0 : 0.82,
+                                    duration: _kSuccessTransitionDuration,
+                                    curve: Curves.easeOutBack,
+                                    child: Container(
+                                      width: 82,
+                                      height: 82,
+                                      decoration: BoxDecoration(
+                                        color: Colors.white
+                                            .withValues(alpha: 0.08),
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                          color: Colors.white
+                                              .withValues(alpha: 0.25),
+                                          width: 2,
+                                        ),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color:
+                                                Colors.black.withOpacity(0.4),
+                                            blurRadius: 18,
+                                            offset: const Offset(0, 8),
+                                          ),
+                                        ],
+                                      ),
+                                      alignment: Alignment.center,
+                                      child: const Icon(
+                                        Icons.check_rounded,
+                                        color: Colors.white,
+                                        size: 40,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _titleCase(String value) {
+    if (value.isEmpty) return value;
+    final parts = value.split(RegExp(r'[\s_-]+')).where((p) => p.isNotEmpty);
+    return parts
+        .map(
+          (part) =>
+              part.substring(0, 1).toUpperCase() +
+              part.substring(1).toLowerCase(),
+        )
+        .join(' ');
+  }
+}
+
+class _ActionPill extends StatelessWidget {
+  const _ActionPill({
+    required this.label,
+    required this.onTap,
+    this.fillColor,
+  });
+
+  final String label;
+  final VoidCallback onTap;
+  final Color? fillColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 44,
+        decoration: BoxDecoration(
+          color: fillColor ?? Colors.white.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.12),
+            width: 1,
+          ),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          label.toUpperCase(),
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.3,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DetailRow extends StatelessWidget {
+  const _DetailRow({
+    required this.label,
+    required this.value,
+    this.helper,
+    this.leading,
+  });
+
+  final String label;
+  final String value;
+  final String? helper;
+  final Widget? leading;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (leading != null) ...[
+          leading!,
+          const SizedBox(width: 8),
         ],
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label.toUpperCase(),
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.7),
+                  fontSize: 10,
+                  letterSpacing: 1.1,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                value,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (helper != null) ...[
+                const SizedBox(height: 1),
+                Text(
+                  helper!,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -1351,9 +2762,29 @@ class _CashFlowSectionState extends State<_CashFlowSection> {
     _reload();
   }
 
+  void _openTransactionDetail(BankTransaction txn, String heroTag) {
+    HapticFeedback.selectionClick();
+    Navigator.of(context).push(
+      PageRouteBuilder<void>(
+        opaque: false,
+        transitionDuration: const Duration(milliseconds: 420),
+        reverseTransitionDuration: const Duration(milliseconds: 360),
+        pageBuilder: (_, __, ___) => TransactionDetailPopup(
+          transaction: txn,
+          heroTag: heroTag,
+          onEdit: () => _openTransactionComposer(txn),
+          onDeleted: () {
+            if (!mounted) return;
+            _reload();
+          },
+        ),
+      ),
+    );
+  }
+
   void _openTransactionComposer(BankTransaction txn) {
     Navigator.of(context).push(
-      MaterialPageRoute(
+      MaterialPageRoute<void>(
         builder: (_) => CreateTransactionScreen(
           selectedBudgetId: widget.selectedBudgetId,
           initialTransaction: txn,
@@ -1854,170 +3285,201 @@ class _CashFlowSectionState extends State<_CashFlowSection> {
               return FutureBuilder<CashFlowSnapshot>(
                 future: _future,
                 builder: (context, snap) {
-              if (snap.connectionState == ConnectionState.waiting &&
-                  !snap.hasData) {
-                return const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 16),
-                  child: Center(
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                );
-              }
-
-              if (snap.hasError) {
-                final err = snap.error;
-                final String errText = err?.toString() ?? '';
-                final bool offline = err is BankApiOfflineException ||
-                    errText.contains('UNREACHABLE') ||
-                    errText.contains('TIMEOUT');
-
-                final msg = offline
-                    ? 'Can’t reach Kontinuum server. Is it running?'
-                    : 'Unable to load cash flow.';
-                return _CashFlowErrorBanner(
-                  message: msg,
-                  onRetry: _retry,
-                );
-              }
-
-              if (!snap.hasData) {
-                return const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 12),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'No data available for this period.',
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 12,
+                  if (snap.connectionState == ConnectionState.waiting &&
+                      !snap.hasData) {
+                    return const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 16),
+                      child: Center(
+                        child: CircularProgressIndicator(strokeWidth: 2),
                       ),
-                    ),
-                  ),
-                );
-              }
+                    );
+                  }
 
-              final data = snap.data!;
-              final serverTxns = data.transactions;
-              final (from, to) = _boundsForRange(_range);
+                  if (snap.hasError) {
+                    final err = snap.error;
+                    final String errText = err?.toString() ?? '';
+                    final bool offline = err is BankApiOfflineException ||
+                        errText.contains('UNREACHABLE') ||
+                        errText.contains('TIMEOUT');
 
-              final manualTxns = _manualTransactionsForRange(
-                from: from,
-                to: to,
-                accountType: _accountTypeParam(),
-                flow: _flowParam(),
-                category: _categoryFilter == 'all' ? null : _categoryFilter,
-                query: _searchQuery.isNotEmpty ? _searchQuery : null,
-              );
+                    final msg = offline
+                        ? 'Can’t reach Kontinuum server. Is it running?'
+                        : 'Unable to load cash flow.';
+                    return _CashFlowErrorBanner(
+                      message: msg,
+                      onRetry: _retry,
+                    );
+                  }
 
-              final txns = <BankTransaction>[
-                ...serverTxns,
-                ...manualTxns,
-              ]..sort((a, b) {
-                  final ad = a.date ?? DateTime.fromMillisecondsSinceEpoch(0);
-                  final bd = b.date ?? DateTime.fromMillisecondsSinceEpoch(0);
-                  return bd.compareTo(ad);
-                });
-
-              final summary =
-                  _summaryWithManual(data.summary, manualTxns, from, to);
-
-              _updateCategoryOptionsFromTransactions(txns);
-
-              if (txns.isEmpty) {
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (summary != null)
-                      _buildSummaryRow(summary, txns, from, to),
-                    const Padding(
+                  if (!snap.hasData) {
+                    return const Padding(
                       padding: EdgeInsets.symmetric(vertical: 12),
-                      child: Text(
-                        'No transactions in this period.',
-                        style: TextStyle(
-                          color: Colors.white70,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ),
-                  ],
-                );
-              }
-
-              final children = <Widget>[];
-
-              if (summary != null) {
-                children.add(_buildSummaryRow(summary, txns, from, to));
-              }
-
-              // Group by date string YYYY-MM-DD
-              final byDay = <String, List<BankTransaction>>{};
-              final dateKeyFmt = DateFormat('yyyy-MM-dd');
-              for (final t in txns) {
-                final d = t.date;
-                final key = d != null ? dateKeyFmt.format(d) : 'Unknown';
-                byDay.putIfAbsent(key, () => []).add(t);
-              }
-
-              final keys = byDay.keys.toList()..sort((a, b) => b.compareTo(a));
-
-              final todayNow = AppClock.now();
-              final todayKey = dateKeyFmt.format(todayNow);
-              final yesterdayKey =
-                  dateKeyFmt.format(todayNow.subtract(const Duration(days: 1)));
-              final dayLabelFmt = DateFormat('EEE, MMM d');
-
-              for (final key in keys) {
-                final list = byDay[key]!;
-                DateTime? parsed;
-                try {
-                  parsed = DateTime.parse(key);
-                } catch (_) {}
-
-                final label = key == todayKey
-                    ? 'Today'
-                    : key == yesterdayKey
-                        ? 'Yesterday'
-                        : (parsed != null ? dayLabelFmt.format(parsed) : key);
-
-                children.add(
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6, bottom: 4),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        label,
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-
-                children.add(
-                  Column(
-                    children: [
-                      for (final entry in list.asMap().entries)
-                        Padding(
-                          padding: EdgeInsets.only(
-                              bottom:
-                                  entry.key == list.length - 1 ? 0 : 8),
-                          child: _transactionPill(
-                            entry.value,
-                            onTap: () => _openTransactionComposer(entry.value),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          'No data available for this period.',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
                           ),
                         ),
-                    ],
-                  ),
-                );
-              }
+                      ),
+                    );
+                  }
 
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: children,
-              );
+                  final data = snap.data!;
+                  final (from, to) = _boundsForRange(_range);
+
+                  final removedIds = _removedTransactionIds();
+                  final removedServerTxns = removedIds.isEmpty
+                      ? const <BankTransaction>[]
+                      : data.transactions
+                          .where((txn) => removedIds.contains(txn.id))
+                          .toList(growable: false);
+
+                  final serverTxns = removedIds.isEmpty
+                      ? List<BankTransaction>.from(data.transactions)
+                      : data.transactions
+                          .where((txn) => !removedIds.contains(txn.id))
+                          .toList(growable: false);
+
+                  final manualTxns = _manualTransactionsForRange(
+                    from: from,
+                    to: to,
+                    accountType: _accountTypeParam(),
+                    flow: _flowParam(),
+                    category: _categoryFilter == 'all' ? null : _categoryFilter,
+                    query: _searchQuery.isNotEmpty ? _searchQuery : null,
+                  );
+
+                  final summary = _summaryWithManual(
+                    _summaryWithoutTransactions(
+                      data.summary,
+                      removedServerTxns,
+                    ),
+                    manualTxns,
+                    from,
+                    to,
+                  );
+
+                  final txns = <BankTransaction>[
+                    ...serverTxns,
+                    ...manualTxns,
+                  ]..sort((a, b) {
+                      final ad =
+                          a.date ?? DateTime.fromMillisecondsSinceEpoch(0);
+                      final bd =
+                          b.date ?? DateTime.fromMillisecondsSinceEpoch(0);
+                      return bd.compareTo(ad);
+                    });
+
+                  _updateCategoryOptionsFromTransactions(txns);
+
+                  if (txns.isEmpty) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (summary != null)
+                          _buildSummaryRow(summary, txns, from, to),
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          child: Text(
+                            'No transactions in this period.',
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  }
+
+                  final children = <Widget>[];
+
+                  if (summary != null) {
+                    children.add(_buildSummaryRow(summary, txns, from, to));
+                  }
+
+                  // Group by date string YYYY-MM-DD
+                  final byDay = <String, List<BankTransaction>>{};
+                  final dateKeyFmt = DateFormat('yyyy-MM-dd');
+                  for (final t in txns) {
+                    final d = t.date;
+                    final key = d != null ? dateKeyFmt.format(d) : 'Unknown';
+                    byDay.putIfAbsent(key, () => []).add(t);
+                  }
+
+                  final keys = byDay.keys.toList()
+                    ..sort((a, b) => b.compareTo(a));
+
+                  final todayNow = AppClock.now();
+                  final todayKey = dateKeyFmt.format(todayNow);
+                  final yesterdayKey = dateKeyFmt
+                      .format(todayNow.subtract(const Duration(days: 1)));
+                  final dayLabelFmt = DateFormat('EEE, MMM d');
+
+                  for (final key in keys) {
+                    final list = byDay[key]!;
+                    DateTime? parsed;
+                    try {
+                      parsed = DateTime.parse(key);
+                    } catch (_) {}
+
+                    final label = key == todayKey
+                        ? 'Today'
+                        : key == yesterdayKey
+                            ? 'Yesterday'
+                            : (parsed != null
+                                ? dayLabelFmt.format(parsed)
+                                : key);
+
+                    children.add(
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6, bottom: 4),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            label,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+
+                    children.add(
+                      Column(
+                        children: [
+                          for (final entry in list.asMap().entries)
+                            Builder(builder: (_) {
+                              final txn = entry.value;
+                              final heroTag =
+                                  'cashflow_txn_${txn.id}_${txn.date?.millisecondsSinceEpoch ?? 0}_${txn.amountCents}_${entry.key}';
+                              return Padding(
+                                padding: EdgeInsets.only(
+                                  bottom: entry.key == list.length - 1 ? 0 : 8,
+                                ),
+                                child: _transactionPill(
+                                  txn,
+                                  heroTag: heroTag,
+                                  onTap: () =>
+                                      _openTransactionDetail(txn, heroTag),
+                                ),
+                              );
+                            }),
+                        ],
+                      ),
+                    );
+                  }
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: children,
+                  );
                 },
               );
             },
@@ -2202,7 +3664,7 @@ class _CategoriesSectionState extends State<_CategoriesSection> {
     }
   }
 
-  Map<String, int> _computeMonthlyCategoryTotals() {
+  Map<String, int> _computeCategoryTotalsForSpan(BudgetTimeSpan span) {
     final map = <String, int>{};
     for (final c in widget.budget.categories) {
       map[c.name] = 0;
@@ -2210,7 +3672,7 @@ class _CategoriesSectionState extends State<_CategoriesSection> {
     for (final rec in widget.budget.recurrings) {
       final cat = rec.category;
       if (cat == null) continue;
-      final cents = normalizedMonthlyCents(rec);
+      final cents = normalizedRecurringCents(rec, span);
       map[cat.name] = (map[cat.name] ?? 0) + cents;
     }
     return map;
@@ -2233,10 +3695,10 @@ class _CategoriesSectionState extends State<_CategoriesSection> {
   @override
   Widget build(BuildContext context) {
     final budget = widget.budget;
-    final monthlyTotals = _computeMonthlyCategoryTotals();
-    final int budgetMonthlyCents = budget.monthlyAmount * 100;
+    final monthlyTotals = _computeCategoryTotalsForSpan(budget.cadence);
+    final int budgetSpanCents = budget.amountCentsForSpan(budget.cadence);
 
-    final hasBudget = budgetMonthlyCents > 0;
+    final hasBudget = budgetSpanCents > 0;
     final rangeLabel = _rangeDescriptionLabel();
 
     // Make sure selected category name always exists if there are categories.
@@ -2323,7 +3785,7 @@ class _CategoriesSectionState extends State<_CategoriesSection> {
             _buildCategoryList(
               budget: budget,
               monthlyTotals: monthlyTotals,
-              budgetMonthlyCents: budgetMonthlyCents,
+              budgetSpanCents: budgetSpanCents,
               selectedName: effectiveSelected,
             ),
             const SizedBox(height: 12),
@@ -2383,11 +3845,11 @@ class _CategoriesSectionState extends State<_CategoriesSection> {
   Widget _buildCategoryList({
     required Budget budget,
     required Map<String, int> monthlyTotals,
-    required int budgetMonthlyCents,
+    required int budgetSpanCents,
     required String? selectedName,
   }) {
     final tiles = <Widget>[];
-    final total = budgetMonthlyCents <= 0 ? 0 : budgetMonthlyCents;
+    final total = budgetSpanCents <= 0 ? 0 : budgetSpanCents;
 
     for (final cat in budget.categories) {
       final cents = monthlyTotals[cat.name] ?? 0;
@@ -2521,147 +3983,154 @@ class _CategoriesSectionState extends State<_CategoriesSection> {
             return FutureBuilder<CashFlowSnapshot>(
               future: _future,
               builder: (context, snap) {
-            if (snap.connectionState == ConnectionState.waiting &&
-                !snap.hasData) {
-              return const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
-                child: Center(
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-              );
-            }
+                if (snap.connectionState == ConnectionState.waiting &&
+                    !snap.hasData) {
+                  return const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 12),
+                    child: Center(
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  );
+                }
 
-            if (snap.hasError) {
-              final err = snap.error;
-              final String errText = err?.toString() ?? '';
-              final bool offline = err is BankApiOfflineException ||
-                  errText.contains('UNREACHABLE') ||
-                  errText.contains('TIMEOUT');
+                if (snap.hasError) {
+                  final err = snap.error;
+                  final String errText = err?.toString() ?? '';
+                  final bool offline = err is BankApiOfflineException ||
+                      errText.contains('UNREACHABLE') ||
+                      errText.contains('TIMEOUT');
 
-              final msg = offline
-                  ? 'Can’t reach Kontinuum server. Is it running?'
-                  : 'Unable to load transactions for this period.';
-              return _CashFlowErrorBanner(
-                message: msg,
-                onRetry: _reload,
-              );
-            }
+                  final msg = offline
+                      ? 'Can’t reach Kontinuum server. Is it running?'
+                      : 'Unable to load transactions for this period.';
+                  return _CashFlowErrorBanner(
+                    message: msg,
+                    onRetry: _reload,
+                  );
+                }
 
-            if (!snap.hasData) {
-              return const Padding(
-                padding: EdgeInsets.symmetric(vertical: 8),
-                child: Text(
-                  'No transaction data available.',
-                  style: TextStyle(
-                    color: Colors.white70,
-                    fontSize: 12,
-                  ),
-                ),
-              );
-            }
-
-            final snapshot = snap.data!;
-            final allTxns = snapshot.transactions;
-            final filtered = _filterForCategory(allTxns, selectedCategoryName);
-            final (from, to) = _boundsForRange(_range);
-            final manualTxns = _manualTransactionsForRange(
-              from: from,
-              to: to,
-              accountType: null,
-              flow: 'expense',
-              category: selectedCategoryName,
-              query: null,
-            );
-            final txns = <BankTransaction>[
-              ...filtered,
-              ...manualTxns,
-            ]..sort((a, b) {
-                final ad = a.date ?? DateTime.fromMillisecondsSinceEpoch(0);
-                final bd = b.date ?? DateTime.fromMillisecondsSinceEpoch(0);
-                return bd.compareTo(ad);
-              });
-
-            if (txns.isEmpty) {
-              final catLabel = selectedCategoryName ?? 'this period';
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Text(
-                  'No transactions for $catLabel in $rangeLabel.',
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 12,
-                  ),
-                ),
-              );
-            }
-
-            // Group by date like in Cash Flow.
-            final byDay = <String, List<BankTransaction>>{};
-            final dateKeyFmt = DateFormat('yyyy-MM-dd');
-            for (final t in txns) {
-              final d = t.date;
-              final key = d != null ? dateKeyFmt.format(d) : 'Unknown';
-              byDay.putIfAbsent(key, () => []).add(t);
-            }
-
-            final keys = byDay.keys.toList()..sort((a, b) => b.compareTo(a));
-
-            final todayNow = AppClock.now();
-            final todayKey = dateKeyFmt.format(todayNow);
-            final yesterdayKey =
-                dateKeyFmt.format(todayNow.subtract(const Duration(days: 1)));
-            final dayLabelFmt = DateFormat('EEE, MMM d');
-
-            final children = <Widget>[];
-
-            for (final key in keys) {
-              final list = byDay[key]!;
-              DateTime? parsed;
-              try {
-                parsed = DateTime.parse(key);
-              } catch (_) {}
-
-              final label = key == todayKey
-                  ? 'Today'
-                  : key == yesterdayKey
-                      ? 'Yesterday'
-                      : (parsed != null ? dayLabelFmt.format(parsed) : key);
-
-              children.add(
-                Padding(
-                  padding: const EdgeInsets.only(top: 6, bottom: 4),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
+                if (!snap.hasData) {
+                  return const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8),
                     child: Text(
-                      label,
-                      style: const TextStyle(
+                      'No transaction data available.',
+                      style: TextStyle(
                         color: Colors.white70,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
+                        fontSize: 12,
                       ),
                     ),
-                  ),
-                ),
-              );
+                  );
+                }
 
-              children.add(
-                Column(
-                  children: [
-                    for (int i = 0; i < list.length; i++)
-                      Padding(
-                        padding: EdgeInsets.only(
-                            bottom: i == list.length - 1 ? 0 : 8),
-                        child: _transactionPill(list[i]),
+                final snapshot = snap.data!;
+                final removedIds = _removedTransactionIds();
+                final allTxns = removedIds.isEmpty
+                    ? snapshot.transactions
+                    : snapshot.transactions
+                        .where((txn) => !removedIds.contains(txn.id))
+                        .toList(growable: false);
+                final filtered =
+                    _filterForCategory(allTxns, selectedCategoryName);
+                final (from, to) = _boundsForRange(_range);
+                final manualTxns = _manualTransactionsForRange(
+                  from: from,
+                  to: to,
+                  accountType: null,
+                  flow: 'expense',
+                  category: selectedCategoryName,
+                  query: null,
+                );
+                final txns = <BankTransaction>[
+                  ...filtered,
+                  ...manualTxns,
+                ]..sort((a, b) {
+                    final ad = a.date ?? DateTime.fromMillisecondsSinceEpoch(0);
+                    final bd = b.date ?? DateTime.fromMillisecondsSinceEpoch(0);
+                    return bd.compareTo(ad);
+                  });
+
+                if (txns.isEmpty) {
+                  final catLabel = selectedCategoryName ?? 'this period';
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Text(
+                      'No transactions for $catLabel in $rangeLabel.',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
                       ),
-                  ],
-                ),
-              );
-            }
+                    ),
+                  );
+                }
 
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: children,
-            );
+                // Group by date like in Cash Flow.
+                final byDay = <String, List<BankTransaction>>{};
+                final dateKeyFmt = DateFormat('yyyy-MM-dd');
+                for (final t in txns) {
+                  final d = t.date;
+                  final key = d != null ? dateKeyFmt.format(d) : 'Unknown';
+                  byDay.putIfAbsent(key, () => []).add(t);
+                }
+
+                final keys = byDay.keys.toList()
+                  ..sort((a, b) => b.compareTo(a));
+
+                final todayNow = AppClock.now();
+                final todayKey = dateKeyFmt.format(todayNow);
+                final yesterdayKey = dateKeyFmt
+                    .format(todayNow.subtract(const Duration(days: 1)));
+                final dayLabelFmt = DateFormat('EEE, MMM d');
+
+                final children = <Widget>[];
+
+                for (final key in keys) {
+                  final list = byDay[key]!;
+                  DateTime? parsed;
+                  try {
+                    parsed = DateTime.parse(key);
+                  } catch (_) {}
+
+                  final label = key == todayKey
+                      ? 'Today'
+                      : key == yesterdayKey
+                          ? 'Yesterday'
+                          : (parsed != null ? dayLabelFmt.format(parsed) : key);
+
+                  children.add(
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6, bottom: 4),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          label,
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+
+                  children.add(
+                    Column(
+                      children: [
+                        for (int i = 0; i < list.length; i++)
+                          Padding(
+                            padding: EdgeInsets.only(
+                                bottom: i == list.length - 1 ? 0 : 8),
+                            child: _transactionPill(list[i]),
+                          ),
+                      ],
+                    ),
+                  );
+                }
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: children,
+                );
               },
             );
           },
@@ -2690,6 +4159,7 @@ List<BankTransaction> _manualTransactionsForRange({
   final queryFilter = query?.toLowerCase();
 
   for (final txn in box.values) {
+    if (txn.removed) continue;
     if (!txn.manual) continue;
     final date = txn.date;
     if (date == null) continue;
@@ -2762,6 +4232,9 @@ BankTransaction _manualToBankTransaction(BudgetTransaction txn) {
     category: txn.category,
   );
 }
+
+Set<String> _removedTransactionIds() =>
+    TransactionsStore.allRemovedTransactionIds();
 
 CashFlowSummary? _summaryWithManual(
   CashFlowSummary? base,
@@ -2851,6 +4324,25 @@ class _MiniCategoryRing extends StatelessWidget {
       ),
     );
   }
+}
+
+CashFlowSummary? _summaryWithoutTransactions(
+  CashFlowSummary? base,
+  List<BankTransaction> removed,
+) {
+  if (base == null || removed.isEmpty) return base;
+  final delta = _manualSummaryDelta(removed);
+  if (delta.inflow == 0 && delta.outflow == 0 && delta.net == 0) {
+    return base;
+  }
+  final nextIncome = math.max(0.0, base.inflow - delta.inflow);
+  final nextOutflow = math.max(0.0, base.outflow - delta.outflow);
+  return CashFlowSummary(
+    totalIncome: nextIncome,
+    totalExpense: nextOutflow,
+    from: base.from,
+    to: base.to,
+  );
 }
 
 /* ───────────────────────── Error banner ───────────────────────── */

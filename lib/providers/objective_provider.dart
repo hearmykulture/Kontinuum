@@ -29,6 +29,7 @@ class ObjectiveProvider with ChangeNotifier {
   final Map<String, Stat> _stats = {};
   final Map<String, Skill> _skills = {};
   final Map<String, List<Skill>> _skillsByCategory = {};
+  static const String _kFallbackStatCategory = 'GENERAL';
 
   static const List<int> _abstinenceMilestoneThresholds = <int>[
     1,
@@ -101,6 +102,10 @@ class ObjectiveProvider with ChangeNotifier {
     await _hiveService.saveSkills(_skills.values.toList());
   }
 
+  Future<void> persistStats() async {
+    await _hiveService.saveStats(_stats);
+  }
+
   DateTime _normalize(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
 
   // ✅ Use interval-aware activation instead of weekday toggles only
@@ -123,7 +128,10 @@ class ObjectiveProvider with ChangeNotifier {
   }
 
   double getProgressForDay(DateTime date) {
-    final objectives = getObjectivesForDay(date);
+    final normalized = _normalize(date);
+    final objectives = getObjectivesForDay(normalized)
+        .where((o) => !o.isAbstinence)
+        .toList();
     if (objectives.isEmpty) return 0.0;
     final completed = objectives.where((o) => o.isCompleted).length;
     return completed / objectives.length;
@@ -132,9 +140,21 @@ class ObjectiveProvider with ChangeNotifier {
   TodayState getTodayState(DateTime date) {
     final normalized = _normalize(date);
     final todaysObjectives = getObjectivesForDay(normalized);
-    final unlocked = todaysObjectives.where((o) => !o.isLocked).toList();
+    final unlocked = todaysObjectives
+        .where((o) => !o.isLocked && !o.isAbstinence)
+        .toList();
+
+    final rawMinutes = unlocked.fold<int>(0, (sum, objective) {
+      final type = objective.type;
+      if (type == ObjectiveType.tally || type == ObjectiveType.stopwatch) {
+        return sum + objective.getCompletedAmount(normalized);
+      }
+      if (objective.isCompleted) {
+        return sum + math.max(1, objective.xpReward);
+      }
+      return sum;
+    });
     final completed = unlocked.where((o) => o.isCompleted).toList();
-    final rawMinutes = completed.fold<int>(0, (sum, o) => sum + o.xpReward);
 
     return TodayState(
       ymd: ymd(normalized),
@@ -270,13 +290,26 @@ class ObjectiveProvider with ChangeNotifier {
       },
     );
 
+    if (!obj.isCompleted && obj.type == ObjectiveType.tally) {
+      final int target = math.max(0, obj.targetAmount);
+      final int currentAmount = obj.getCompletedAmount(normalized);
+      final int desiredAmount = math.max(target, currentAmount);
+      updateObjectiveAmountForDate(normalized, objectiveId, desiredAmount);
+      return;
+    }
+
     final prevTotalXp = totalXp;
-    final xp = obj.actualXpEarned ?? obj.xpReward;
+    final int xp = obj.actualXpEarned ?? obj.xpReward;
 
     if (obj.isCompleted) {
       // Toggle to INCOMPLETE — keep progress
       obj.isCompleted = false;
       obj.completedOn = null;
+
+      if (obj.type == ObjectiveType.tally) {
+        obj.completedAmount = 0;
+        obj.clearCompletedAmount(normalized);
+      }
 
       for (final catId in obj.categoryIds) {
         final cat = _categories.putIfAbsent(
@@ -296,18 +329,21 @@ class ObjectiveProvider with ChangeNotifier {
             repsForMastery: 1,
           ),
         );
-        // Undo target grant given on completion
-        stat.count = math.max(0, stat.count - obj.targetAmount);
+        // Undo unit grant given on completion (count tracks completions)
+        stat.count = math.max(0, stat.count - 1);
         stat.xp = math.max(0, stat.xp - xp);
 
         for (final skill in _skills.values) {
           if (skill.stats.any((s) => s.id == statId)) {
+            addXpToSkill(skill.id, -xp);
             _statHistory.add(
               StatHistoryEntry(
                 statId: stat.id,
                 date: AppClock.now(),
-                amount: -obj.targetAmount,
+                amount: -obj.targetAmount, // unit delta
+                xpDelta: -xp,
                 skillId: skill.id,
+                objectiveId: obj.id,
               ),
             );
           }
@@ -351,22 +387,25 @@ class ObjectiveProvider with ChangeNotifier {
             repsForMastery: 1,
           ),
         );
-        stat.count += obj.targetAmount;
-        stat.xp += xp;
+        // Count each completion as one unit toward the stat
+        stat.count += 1;
+        stat.xp = math.max(0, stat.xp + xp);
 
         for (final skill in _skills.values) {
           if (skill.stats.any((s) => s.id == statId)) {
             addXpToSkill(skill.id, xp);
 
             _statHistory.add(
-              StatHistoryEntry(
-                statId: stat.id,
-                date: AppClock.now(),
-                amount: obj.targetAmount,
-                skillId: skill.id,
-              ),
-            );
-          }
+            StatHistoryEntry(
+              statId: stat.id,
+              date: AppClock.now(),
+              amount: obj.targetAmount, // unit delta
+              xpDelta: xp,
+              skillId: skill.id,
+              objectiveId: obj.id,
+            ),
+          );
+        }
         }
 
         final milestone = _milestones[statId];
@@ -583,7 +622,7 @@ class ObjectiveProvider with ChangeNotifier {
     );
 
     stat.count = currentDays;
-    stat.xp = currentDays;
+    stat.xp = math.max(0, currentDays);
     return statId;
   }
 
@@ -623,6 +662,7 @@ class ObjectiveProvider with ChangeNotifier {
     }
     for (final stat in _stats.values) {
       stat.count = 0;
+      stat.xp = 0;
     }
 
     _skills.clear();
@@ -645,26 +685,74 @@ class ObjectiveProvider with ChangeNotifier {
   }
 
   void registerSkill(String skillId, Skill skill) {
+    ensureCategoryExists(skill.categoryId, displayName: skill.categoryId);
     _skills[skillId] = skill;
 
     final categoryId = skill.categoryId;
     _skillsByCategory.putIfAbsent(categoryId, () => []).add(skill);
 
+    // Normalize weights so caps stay proportional even if incoming data
+    // doesn't sum to 1.0 per category/skill.
+    _normalizeSkillWeights(categoryId);
+    for (final s in _skillsByCategory[categoryId]!) {
+      _normalizeStatWeights(s);
+    }
+
     for (final stat in skill.stats) {
-      // Ensure stats inherit their parent skill's weight so their XP caps scale
-      // proportionally with the skill/category share instead of falling back to
-      // the legacy minutes-based curve. This keeps early levels consistent with
-      // the eased XP experience we expose everywhere else.
-      stat.parentSkillWeight = skill.weight;
+      stat.categoryId ??= skill.categoryId;
       registerStat(stat);
     }
     notifyListeners();
   }
 
+  void attachStatToSkills(String statId, Iterable<String> skillIds) {
+    final stat = _stats[statId];
+    if (stat == null) return;
+
+    bool updated = false;
+    for (final skillId in skillIds) {
+      final skill = _skills[skillId];
+      if (skill == null) continue;
+      final exists = skill.stats.any((s) => s.id == statId);
+      if (exists) continue;
+      skill.stats.add(stat);
+      _normalizeStatWeights(skill);
+      updated = true;
+    }
+
+    if (updated) {
+      Future.microtask(() async {
+        await persistSkills();
+        await persistStats();
+      });
+      notifyListeners();
+    }
+  }
+
+  void _normalizeSkillWeights(String categoryId) {
+    final skills = _skillsByCategory[categoryId];
+    if (skills == null || skills.isEmpty) return;
+
+    final even = 1.0 / skills.length;
+    for (final skill in skills) {
+      skill.weight = even;
+    }
+  }
+
+  void _normalizeStatWeights(Skill skill) {
+    if (skill.stats.isEmpty) return;
+
+    final even = 1.0 / skill.stats.length;
+    for (final stat in skill.stats) {
+      stat.weight = even;
+      stat.parentSkillWeight = skill.weight;
+    }
+  }
+
   void addXpToSkill(String skillId, int xp) {
     final skill = _skills[skillId];
     if (skill != null) {
-      skill.xp += xp;
+      skill.xp = math.max(0, skill.xp + xp);
       Future.microtask(() => persistSkills());
     }
     notifyListeners();
@@ -675,8 +763,41 @@ class ObjectiveProvider with ChangeNotifier {
   }
 
   void registerStat(Stat stat) {
+    stat.categoryId ??= _kFallbackStatCategory;
+    if (stat.categoryId != null) {
+      stat.categoryId = stat.categoryId!.toUpperCase();
+    }
     _stats[stat.id] = stat;
+    _syncStatMetadata(stat);
+    Future.microtask(() => persistStats());
     notifyListeners();
+  }
+
+  bool _syncStatMetadata(Stat stat) {
+    final existing = StatRepository.getById(stat.id);
+    final category = stat.categoryId ??
+        existing?.categoryId ??
+        _kFallbackStatCategory;
+    final emoji = stat.emoji ?? existing?.emoji;
+    final description = stat.description ?? existing?.description;
+    final changed = stat.categoryId != category ||
+        stat.emoji != emoji ||
+        stat.description != description;
+    stat.categoryId ??= category;
+    if (stat.emoji == null && emoji != null) stat.emoji = emoji;
+    if (stat.description == null && description != null) {
+      stat.description = description;
+    }
+    StatRepository.upsert(
+      StatMetadata(
+        id: stat.id,
+        label: stat.label,
+        categoryId: category,
+        emoji: emoji,
+        description: description,
+      ),
+    );
+    return changed;
   }
 
   Future<void> _init() async {
@@ -692,6 +813,13 @@ class ObjectiveProvider with ChangeNotifier {
       final loadedMilestones = await _hiveService.loadMilestones();
 
       _stats.addAll(loadedStats);
+      var mutatedStats = false;
+      for (final stat in _stats.values) {
+        mutatedStats = _syncStatMetadata(stat) || mutatedStats;
+      }
+      if (mutatedStats) {
+        Future.microtask(() => persistStats());
+      }
       _categories.addAll(loadedCategories);
       _staticObjectives.addAll(loadedStaticObjectives);
       _objectivesByDate.addAll(loadedObjectivesByDate);
@@ -787,7 +915,7 @@ class ObjectiveProvider with ChangeNotifier {
 
   int getXpForId(String id) {
     if (_stats.containsKey(id)) {
-      return _stats[id]!.count;
+      return _stats[id]!.xp;
     } else if (_skills.containsKey(id)) {
       return _skills[id]!.xp;
     } else if (_categories.containsKey(id)) {
@@ -805,8 +933,10 @@ class ObjectiveProvider with ChangeNotifier {
     }
     for (final stat in _stats.values) {
       stat.count = 0;
+      stat.xp = 0;
     }
 
+    _stats.clear();
     _skills.clear();
     _skillsByCategory.clear();
     _staticObjectives.clear();
@@ -889,7 +1019,8 @@ class ObjectiveProvider with ChangeNotifier {
     final result = <String, int>{};
     for (final entry in _statHistory) {
       if (cutoff == null || entry.date.isAfter(cutoff)) {
-        result[entry.statId] = (result[entry.statId] ?? 0) + entry.amount;
+        final int delta = entry.xpDelta != 0 ? entry.xpDelta : entry.amount;
+        result[entry.statId] = (result[entry.statId] ?? 0) + delta;
       }
     }
     return result;
@@ -901,7 +1032,8 @@ class ObjectiveProvider with ChangeNotifier {
     final deltaMap = <String, int>{};
     for (final entry in _statHistory) {
       if (entry.date.isAfter(start)) {
-        deltaMap[entry.statId] = (deltaMap[entry.statId] ?? 0) + entry.amount;
+        final int delta = entry.xpDelta != 0 ? entry.xpDelta : entry.amount;
+        deltaMap[entry.statId] = (deltaMap[entry.statId] ?? 0) + delta;
       }
     }
     return deltaMap;
@@ -913,8 +1045,9 @@ class ObjectiveProvider with ChangeNotifier {
     final deltaMap = <String, int>{};
     for (final entry in _statHistory) {
       if (entry.skillId != null && entry.date.isAfter(start)) {
+        final int delta = entry.xpDelta != 0 ? entry.xpDelta : entry.amount;
         deltaMap[entry.skillId!] =
-            (deltaMap[entry.skillId!] ?? 0) + entry.amount;
+            (deltaMap[entry.skillId!] ?? 0) + delta;
       }
     }
     return deltaMap;
@@ -1015,8 +1148,10 @@ class ObjectiveProvider with ChangeNotifier {
             StatHistoryEntry(
               statId: stat.id,
               date: AppClock.now(),
-              amount: unitDelta,
+              amount: unitDelta, // unit delta
               skillId: skill.id,
+              xpDelta: xpDelta,
+              objectiveId: obj.id,
             ),
           );
         }

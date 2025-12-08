@@ -200,6 +200,40 @@ class _MiniCalendarSheetState extends State<MiniCalendarSheet> {
     return cells;
   }
 
+  Widget _buildDayNumber({
+    required int day,
+    required double pillSize,
+    required bool isSelectedToday,
+    required Color textColor,
+  }) {
+    final text = Text(
+      '$day',
+      style: TextStyle(
+        fontWeight: FontWeight.w600,
+        fontSize: 14,
+        color: textColor,
+      ),
+    );
+
+    if (!isSelectedToday) return text;
+
+    final double innerSize = (pillSize - 6).clamp(16.0, pillSize);
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        Container(
+          width: innerSize,
+          height: innerSize,
+          decoration: const BoxDecoration(
+            shape: BoxShape.circle,
+            color: _accent,
+          ),
+        ),
+        text,
+      ],
+    );
+  }
+
   void _shiftMonth(int delta) {
     final cur = _displayedMonthN.value;
     final next = DateTime(cur.year, cur.month + delta, 1);
@@ -431,8 +465,11 @@ class _MiniCalendarSheetState extends State<MiniCalendarSheet> {
                                 itemBuilder: (_, i) {
                                   final day = _gridDays[i];
                                   final inDisplayedMonth = day.month == month;
-                                  final isSelected = _sameDay(day, selectedDay);
+                                  final isSelected =
+                                      _sameDay(day, selectedDay);
                                   final isToday = _sameDay(day, today);
+                                  final isSelectedToday =
+                                      isSelected && isToday;
                                   final enabled = _inRange(day);
 
                                   final Color fg = inDisplayedMonth
@@ -441,7 +478,23 @@ class _MiniCalendarSheetState extends State<MiniCalendarSheet> {
                                           0.35); // ↓↓ replaced .withValues
 
                                   BoxDecoration deco;
-                                  if (isToday) {
+                                  if (isSelectedToday) {
+                                    deco = BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: _panel,
+                                      border: const Border.fromBorderSide(
+                                        BorderSide(
+                                            color: Colors.white, width: 2.5),
+                                      ),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.white
+                                              .withValues(alpha: 0.06),
+                                          blurRadius: 12,
+                                        ),
+                                      ],
+                                    );
+                                  } else if (isToday) {
                                     deco = BoxDecoration(
                                       shape: BoxShape.circle,
                                       color: _panel,
@@ -501,15 +554,13 @@ class _MiniCalendarSheetState extends State<MiniCalendarSheet> {
                                           height: pill,
                                           decoration: deco,
                                           alignment: Alignment.center,
-                                          child: Text(
-                                            '${day.day}',
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.w600,
-                                              fontSize: 14,
-                                              color: isSelected && !isToday
-                                                  ? Colors.black
-                                                  : fg,
-                                            ),
+                                          child: _buildDayNumber(
+                                            day: day.day,
+                                            pillSize: pill,
+                                            isSelectedToday: isSelectedToday,
+                                            textColor: isSelected
+                                                ? Colors.black
+                                                : fg,
                                           ),
                                         ),
                                       ),

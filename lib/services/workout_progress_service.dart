@@ -152,15 +152,10 @@ class WorkoutProgressService {
 
   // ---- Scheduling helpers -------------------------------------------------
   //
-  // For now, getPrescribedWorkouts() still returns an empty set so the
-  // dashboard falls back to its local _dayPicks schedule. Once you
-  // wire up a persistent WorkoutSchedule model, you can implement both
-  // of these methods to read/write real schedule data.
+  // Scheduling helpers used by dashboards/notifications.
 
-  /// Determine which workouts are prescribed for [routineId] on [date].
-  ///
-  /// Currently returns an empty set; WorkoutDashboardScreen will then
-  /// fall back to the local per-workout weekday pill state.
+  /// Determine which workouts are prescribed for [routineId] on [date], honoring
+  /// global one-off rest overrides and routine-level rest schedules.
   static Set<String> getPrescribedWorkouts({
     String? routineId,
     DateTime? date,
@@ -174,6 +169,17 @@ class WorkoutProgressService {
     }
 
     final DateTime day = DateTime(date.year, date.month, date.day);
+
+    // Global one-off rest overrides mean nothing is prescribed that day.
+    if (WorkoutBoxes.hasRestOverrideFor(day)) {
+      return <String>{};
+    }
+
+    final bool routineRest =
+        routine.restSchedule != null && routine.restSchedule!.isRestOn(day);
+    if (routineRest) {
+      return <String>{};
+    }
 
     final schedulesBox = WorkoutBoxes.schedulesBox;
     final Map<String, WorkoutSchedule> schedulesByWorkout =

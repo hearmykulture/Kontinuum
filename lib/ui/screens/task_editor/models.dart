@@ -66,6 +66,7 @@ class TaskEditorResult {
   final bool hasDeadline;
   final List<ChecklistEntry> checklist;
   final DateTime? date; // null => No Date / Someday
+  final DateTime? deadline; // null => no deadline selected
   final bool someday; // explicit Someday flag (distinct from No Date)
 
   /// Multiple stats may be selected.
@@ -82,6 +83,7 @@ class TaskEditorResult {
     required this.hasDeadline,
     required this.checklist,
     required this.date,
+    this.deadline,
     required this.someday,
     this.stats = const [],
     this.statId,
@@ -103,6 +105,7 @@ class TaskOptionsValue {
   final bool repeatsDaily; // repeat on completion (daily)
   final bool hasReminder;
   final bool hasDeadline;
+  final DateTime? deadline;
 
   /// Multiple stat selections.
   final List<StatPick> stats;
@@ -117,6 +120,7 @@ class TaskOptionsValue {
     this.repeatsDaily = false,
     this.hasReminder = false,
     this.hasDeadline = false,
+    this.deadline,
     this.stats = const [],
     this.statId,
     this.statAmount = 1,
@@ -128,6 +132,7 @@ class TaskOptionsValue {
     bool? repeatsDaily,
     bool? hasReminder,
     bool? hasDeadline,
+    DateTime? deadline,
     List<StatPick>? stats,
     String? statId,
     int? statAmount,
@@ -138,6 +143,7 @@ class TaskOptionsValue {
       repeatsDaily: repeatsDaily ?? this.repeatsDaily,
       hasReminder: hasReminder ?? this.hasReminder,
       hasDeadline: hasDeadline ?? this.hasDeadline,
+      deadline: deadline ?? this.deadline,
       stats: stats ?? this.stats,
       statId: statId ?? this.statId,
       statAmount: statAmount ?? this.statAmount,
@@ -152,6 +158,7 @@ class TaskOptionsValue {
       other.repeatsDaily == repeatsDaily &&
       other.hasReminder == hasReminder &&
       other.hasDeadline == hasDeadline &&
+      other.deadline == deadline &&
       listEquals(other.stats, stats) &&
       other.statId == statId &&
       other.statAmount == statAmount;
@@ -163,6 +170,7 @@ class TaskOptionsValue {
         repeatsDaily,
         hasReminder,
         hasDeadline,
+        deadline,
         Object.hashAll(stats),
         statId,
         statAmount,
@@ -176,6 +184,7 @@ class TaskOptionsController extends ChangeNotifier {
         somedayN = ValueNotifier<bool>(initial?.someday ?? false),
         repeatsDailyN = ValueNotifier<bool>(initial?.repeatsDaily ?? false),
         hasReminderN = ValueNotifier<bool>(initial?.hasReminder ?? false),
+        deadlineN = ValueNotifier<DateTime?>(initial?.deadline),
         hasDeadlineN = ValueNotifier<bool>(initial?.hasDeadline ?? false),
         statsN = ValueNotifier<List<StatPick>>(
             List<StatPick>.from(initial?.stats ?? const [])),
@@ -197,6 +206,7 @@ class TaskOptionsController extends ChangeNotifier {
   final ValueNotifier<bool> somedayN;
   final ValueNotifier<bool> repeatsDailyN;
   final ValueNotifier<bool> hasReminderN;
+  final ValueNotifier<DateTime?> deadlineN;
   final ValueNotifier<bool> hasDeadlineN;
 
   /// NEW multi-stat list
@@ -211,6 +221,7 @@ class TaskOptionsController extends ChangeNotifier {
         somedayN,
         repeatsDailyN,
         hasReminderN,
+        deadlineN,
         hasDeadlineN,
         statsN,
         statIdN,
@@ -225,6 +236,7 @@ class TaskOptionsController extends ChangeNotifier {
         repeatsDaily: repeatsDailyN.value,
         hasReminder: hasReminderN.value,
         hasDeadline: hasDeadlineN.value,
+        deadline: deadlineN.value,
         stats: List<StatPick>.from(statsN.value),
         // legacy mirror from first selected if present
         statId: statsN.value.isNotEmpty ? statsN.value.first.id : statIdN.value,
@@ -240,6 +252,7 @@ class TaskOptionsController extends ChangeNotifier {
     _setIfChanged(repeatsDailyN, v.repeatsDaily);
     _setIfChanged(hasReminderN, v.hasReminder);
     _setIfChanged(hasDeadlineN, v.hasDeadline);
+    _setIfChanged(deadlineN, v.deadline);
     _setIfChangedList(statsN, v.stats);
     // keep legacy mirrors in sync
     _setIfChanged(statIdN, v.statId);
@@ -294,6 +307,7 @@ class TaskOptionsController extends ChangeNotifier {
     somedayN.dispose();
     repeatsDailyN.dispose();
     hasReminderN.dispose();
+    deadlineN.dispose();
     hasDeadlineN.dispose();
     statsN.dispose();
     statIdN.dispose();
@@ -326,11 +340,16 @@ class TaskStatRewarder {
         stat.xp += stat.averageMinutesPerUnit * pick.amount;
         await stat.save();
       }
+      final int xpGain = stat != null
+          ? stat.averageMinutesPerUnit * pick.amount
+          : 0;
       await historyBox.add(StatHistoryEntry(
         statId: pick.id,
         date: DateTime.now(),
-        amount: pick.amount,
+        amount: pick.amount, // unit delta
+        xpDelta: xpGain,
         skillId: null,
+        objectiveId: null,
       ));
     }
   }

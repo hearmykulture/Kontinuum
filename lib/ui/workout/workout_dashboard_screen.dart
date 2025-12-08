@@ -59,9 +59,10 @@ void _wdLog(String message) {
 }
 
 class WorkoutDashboardScreen extends StatefulWidget {
-  const WorkoutDashboardScreen({super.key, this.onClose});
+  const WorkoutDashboardScreen({super.key, this.onClose, this.dateSignal});
 
   final VoidCallback? onClose;
+  final ValueNotifier<DateTime?>? dateSignal;
 
   @override
   State<WorkoutDashboardScreen> createState() => _WorkoutDashboardScreenState();
@@ -69,6 +70,7 @@ class WorkoutDashboardScreen extends StatefulWidget {
 
 class _WorkoutDashboardScreenState extends State<WorkoutDashboardScreen> {
   DateTime _selectedDate = DateTime.now();
+  ValueNotifier<DateTime?>? _dateSignal;
 
   // Initial date coming from navigation (e.g. Finished → /workout)
   bool _routeInitialDateApplied = false;
@@ -118,6 +120,22 @@ class _WorkoutDashboardScreenState extends State<WorkoutDashboardScreen> {
     super.initState();
     AnalyticsService.instance
         .log(WorkoutAnalyticsEvents.workoutDashboardOpened);
+    _attachDateSignal();
+  }
+
+  @override
+  void didUpdateWidget(covariant WorkoutDashboardScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.dateSignal != widget.dateSignal) {
+      _detachDateSignal();
+      _attachDateSignal();
+    }
+  }
+
+  @override
+  void dispose() {
+    _detachDateSignal();
+    super.dispose();
   }
 
   @override
@@ -299,6 +317,31 @@ class _WorkoutDashboardScreenState extends State<WorkoutDashboardScreen> {
     setState(() {
       _selectedDate = normalized;
     });
+  }
+
+  void _attachDateSignal() {
+    _dateSignal = widget.dateSignal;
+    _dateSignal?.addListener(_handleDateSignal);
+    _handleDateSignal();
+  }
+
+  void _detachDateSignal() {
+    _dateSignal?.removeListener(_handleDateSignal);
+    _dateSignal = null;
+  }
+
+  void _handleDateSignal() {
+    final sig = _dateSignal;
+    if (sig == null) return;
+    final DateTime? day = sig.value;
+    if (day == null) return;
+    final normalized = DateTime(day.year, day.month, day.day);
+    setState(() {
+      _selectedDate = normalized;
+      _hasExplicitInitialDate = true;
+      _routeHadInitialDate = true;
+    });
+    sig.value = null;
   }
 
   String _formatYmd(DateTime d) {
@@ -942,30 +985,22 @@ class _WorkoutDashboardScreenState extends State<WorkoutDashboardScreen> {
   /// workout+date, then blend in any in-flight session progress, and clamp.
   double _completionForWorkoutOnDate(
       String workoutId, Workout workout, DateTime date) {
-    // 1) Persisted logs (any legacy/typed shapes).
-    double completionFromLogs = _completionFromLogs(workoutId, date);
-
-    // 2) In-flight session (live progress, even if we haven't written a log).
-    final live = _inFlightCompletion(workoutId, workout, date);
-    if (live > completionFromLogs) {
-      completionFromLogs = live;
-    }
-
-    // 3) If any log says "completed", force 100%.
-    if (_hasCompletedWorkoutOnDate(workoutId, date)) {
-      completionFromLogs = 1.0;
-    }
-
-    return completionFromLogs.clamp(0.0, 1.0);
+    // Use the centralized progress service so the denominator (target sets)
+    // matches what the calendar ring uses.
+    final snapshot = WorkoutProgressService.instance.snapshotForDay(
+      workout: workout,
+      scheduledDate: date,
+    );
+    return snapshot.percent.clamp(0.0, 1.0);
   }
 
   /// Routine-level progress for the calendar/YearProgress header.
   /// Returns a value in [0, 1] representing how "complete" the day is
   /// for the currently resolved routine.
   ///
-  /// NEW: if no workouts are prescribed for a day but the routine has
-  /// workouts configured, we treat that as a scheduled REST day and
-  /// mark it fully complete (light-blue circle).
+  /// Rest days are treated as fully complete (light-blue ring). Days with
+  /// no prescribed workouts return 0 so that new routines without schedules
+  /// don't look fully complete.
   double _routineProgressForDay(DateTime date) {
     try {
       final wp = context.read<WorkoutProvider>();
@@ -992,26 +1027,61 @@ class _WorkoutDashboardScreenState extends State<WorkoutDashboardScreen> {
         date: day,
       );
 
-      // If nothing is prescribed for a routine that DOES have workouts,
-      // treat this as a scheduled REST day and mark it as "complete".
+      // Nothing scheduled (and not a rest day handled above) → no progress.
+      // This avoids auto-completing every day when a routine has workouts but
+      // no per-workout schedule has been set yet.
       if (prescribedIds.isEmpty) {
         return 0.0;
       }
 
-      // Otherwise, compute the average completion for prescribed workouts.
-      double total = 0.0;
-      int count = 0;
+      // Otherwise, compute completion weighted by target sets across all
+      // prescribed workouts. This ensures partial sessions contribute
+      // proportionally (e.g., leaving early counts as partial progress).
+      int totalTargetSets = 0;
+      int totalCompletedSets = 0;
+      double fallbackPercentSum = 0.0; // for workouts without set metadata
+      int fallbackCount = 0;
 
       for (final wid in prescribedIds) {
         final w = wp.getWorkoutById(wid);
         if (w == null) continue;
-        final c = _completionForWorkoutOnDate(wid, w, day);
-        total += c;
-        count++;
+
+        final snapshot = WorkoutProgressService.instance.snapshotForDay(
+          workout: w,
+          scheduledDate: day,
+        );
+
+        if (snapshot.totalSets > 0) {
+          totalTargetSets += snapshot.totalSets;
+          totalCompletedSets += snapshot.completedSets.clamp(
+            0,
+            snapshot.totalSets,
+          );
+        } else {
+          fallbackPercentSum += snapshot.percent.clamp(0.0, 1.0);
+          fallbackCount++;
+        }
       }
 
-      if (count == 0) return 0.0;
-      return (total / count).clamp(0.0, 1.0);
+      double percent;
+      if (totalTargetSets > 0) {
+        percent = totalCompletedSets / totalTargetSets;
+
+        // Blend in any workouts without set counts as equal-weight entries
+        // using their percent to avoid dropping them entirely.
+        if (fallbackCount > 0) {
+          final double fallbackAvg = fallbackPercentSum / fallbackCount;
+          percent = ((percent * totalTargetSets) +
+                  (fallbackAvg * fallbackCount)) /
+              (totalTargetSets + fallbackCount);
+        }
+      } else if (fallbackCount > 0) {
+        percent = fallbackPercentSum / fallbackCount;
+      } else {
+        percent = 0.0;
+      }
+
+      return percent.clamp(0.0, 1.0);
     } catch (_) {
       // Any weirdness: just report "no progress" rather than crash.
       return 0.0;
@@ -1309,6 +1379,13 @@ class _WorkoutDashboardScreenState extends State<WorkoutDashboardScreen> {
   }
 
   // Start -> Session screen
+  void _showSessionStartError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
   Future<void> _startWorkout(String workoutId, {String? routineId}) async {
     final wp = context.read<WorkoutProvider>();
 
@@ -1320,58 +1397,61 @@ class _WorkoutDashboardScreenState extends State<WorkoutDashboardScreen> {
       _selectedDate.day,
     );
 
-    // ── REST-DAY GATE ────────────────────────────────────────────────────────
-    if (routineId != null && routineId.isNotEmpty) {
-      final bool isRestDay = wp.isRestDay(routineId, startedOnDate);
-
-      if (isRestDay) {
-        _wdLog(
-          '[WorkoutDashboard] _startWorkout blocked on rest day → '
-          'workoutId=$workoutId, routineId=$routineId, '
-          'date=${startedOnDate.toIso8601String()}',
-        );
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Today is marked as a rest day for this routine.'),
-            duration: Duration(seconds: 3),
-          ),
-        );
-
-        AnalyticsService.instance.log(
-          'workout_session_blocked_rest_day',
-          {
-            'routineId': routineId,
-            'workoutId': workoutId,
-            'dateYmd': _formatYmd(startedOnDate),
-          },
-        );
-        return;
-      }
+    if (routineId == null || routineId.isEmpty) {
+      _wdLog('[WorkoutDashboard] ⚠️ Cannot start session without routineId');
+      _showSessionStartError('Select a routine before starting a workout.');
+      return;
     }
 
-    if (routineId != null && routineId.isNotEmpty) {
-      final bool hasActiveSession = wp.activeDraft?.workoutId == workoutId;
-      if (!hasActiveSession) {
-        wp.startSession(
-          routineId: routineId,
-          workoutId: workoutId,
-          source: 'dashboard',
-        );
-        _wdLog(
-          '[WorkoutDashboard] Started session → '
-          'workoutId=$workoutId, routineId=$routineId, '
-          'scheduledDate=${startedOnDate.toIso8601String()}',
-        );
-      } else {
-        _wdLog(
-          '[WorkoutDashboard] Resuming active session → '
-          'workoutId=$workoutId, routineId=$routineId',
-        );
+    // ── REST-DAY GATE ────────────────────────────────────────────────────────
+    final bool isRestDay = wp.isRestDay(routineId, startedOnDate);
+
+    if (isRestDay) {
+      _wdLog(
+        '[WorkoutDashboard] _startWorkout blocked on rest day → '
+        'workoutId=$workoutId, routineId=$routineId, '
+        'date=${startedOnDate.toIso8601String()}',
+      );
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Today is marked as a rest day for this routine.'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+
+      AnalyticsService.instance.log(
+        'workout_session_blocked_rest_day',
+        {
+          'routineId': routineId,
+          'workoutId': workoutId,
+          'dateYmd': _formatYmd(startedOnDate),
+        },
+      );
+      return;
+    }
+
+    final bool hasActiveSession = wp.activeDraft?.workoutId == workoutId;
+    if (!hasActiveSession) {
+      final result = wp.startSession(
+        routineId: routineId,
+        workoutId: workoutId,
+        source: 'dashboard',
+        calendarDayOverride: startedOnDate,
+      );
+      if (!result.started) {
+        _showSessionStartError(result.message ?? 'Unable to start session.');
+        return;
       }
+      _wdLog(
+        '[WorkoutDashboard] Started session → '
+        'workoutId=$workoutId, routineId=$routineId, '
+        'scheduledDate=${startedOnDate.toIso8601String()}',
+      );
     } else {
       _wdLog(
-        '[WorkoutDashboard] ⚠️ Cannot start session without routineId',
+        '[WorkoutDashboard] Resuming active session → '
+        'workoutId=$workoutId, routineId=$routineId',
       );
     }
 

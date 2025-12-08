@@ -11,6 +11,7 @@ class YearProgressBar extends StatefulWidget {
     required this.selectedDate,
     required this.getProgressForDay,
     required this.onDateSelected,
+    this.accentColor = const Color(0xFFA56ABD),
     this.firstDateCap,
     this.lastDateCap,
   });
@@ -18,6 +19,7 @@ class YearProgressBar extends StatefulWidget {
   final DateTime selectedDate; // local date
   final double Function(DateTime) getProgressForDay;
   final ValueChanged<DateTime> onDateSelected;
+  final Color accentColor;
   final DateTime? firstDateCap;
   final DateTime? lastDateCap;
 

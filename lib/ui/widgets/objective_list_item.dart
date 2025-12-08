@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:soundpool/soundpool.dart'; // 🔊 stacked chime
 
+import 'package:kontinuum/data/level_utils.dart';
 import 'package:kontinuum/ui/widgets/objective/objective_tokens.dart';
 import 'package:kontinuum/ui/widgets/objective/complete_button.dart';
 import 'package:kontinuum/ui/widgets/objective/tally_stepper.dart';
@@ -392,20 +393,21 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
           final meta = StatRepository.getById(statId);
 
           final xp = stat?.xp ?? 0;
-          final maxXp = stat?.maxXp ?? 100;
+          final maxXp = stat?.maxXp ?? 1;
+          final cap = maxXp <= 0 ? 1 : maxXp;
 
-          final level =
-              (maxXp <= 0 ? 0 : (xp / maxXp) * 100).floor().clamp(0, 99) + 1;
-
-          final double step = (maxXp <= 0 ? 1.0 : maxXp / 100.0);
-          final double lowerBound = (level - 1) * step;
-          final int currentWithin = (xp - lowerBound).clamp(0.0, step).round();
-          final int stepInt = step.round();
+          final lp = LevelUtils.getProgress(xp: xp, maxXp: cap);
+          final level = lp.level;
+          final levelSpan = lp.levelSpan <= 0 ? 1 : lp.levelSpan;
+          final currentWithin = lp.xpIntoLevel.clamp(0, levelSpan).toInt();
+          final cappedXp = xp.clamp(0, cap).toInt();
 
           final display = meta?.display ?? statId;
 
           final prevXp = _lastXp[statId] ?? xp;
-          _lastXp[statId] = xp;
+          final prevCapped = prevXp.clamp(0, cap).toInt();
+          final currCapped = cappedXp.toInt();
+          _lastXp[statId] = currCapped;
 
           final hasMultipleStats = liveObj.statIds.length > 1;
 
@@ -456,9 +458,8 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
             children: [
               MiniXpNumbers(
                 level: level,
-                step: stepInt,
-                currentWithin: currentWithin,
-                totalMaxXp: maxXp,
+                xpIntoLevel: currentWithin,
+                levelSpan: levelSpan,
                 color: color,
               ),
               const SizedBox(height: 6),
@@ -473,9 +474,9 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(8),
                   child: LevelProgressBar(
-                    previousXp: prevXp,
-                    currentXp: xp,
-                    maxXp: maxXp,
+                    previousXp: prevCapped,
+                    currentXp: currCapped,
+                    maxXp: cap,
                     color: color,
                     backgroundColor: const Color(0xFF141622),
                     thickness: 7.5,
@@ -721,9 +722,6 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
           ),
         ),
         const SizedBox(width: 6),
-        // streak badge
-        ObjectiveFlameBadge(objectiveId: live.id),
-        const SizedBox(width: 4),
         // relapse action
         Tooltip(
           message: hasRelapseToday
@@ -791,7 +789,7 @@ class _ObjectiveListItemState extends State<ObjectiveListItem> {
               customBorder: const CircleBorder(),
               onTap: () {
                 HapticFeedback.selectionClick();
-                _openStopwatchSheet(context, provider);
+                _openStopwatchOverlay(context, provider);
               },
               child: const Center(
                 child: Icon(Icons.timer, size: 18, color: Colors.deepPurpleAccent),
@@ -989,68 +987,146 @@ Widget _abstinenceCleanChip(int days) {
   );
 }
 
-  void _openStopwatchSheet(BuildContext context, ObjectiveProvider provider) {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF101014),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
-      isScrollControlled: true,
-      builder: (_) => StopwatchSheet(
-        targetMinutes: widget.objective.targetAmount,
-        onLogMinutes: (m) {
-          final list = provider.getObjectivesForDay(widget.selectedDate);
-          final idx = list.indexWhere((o) => o.id == widget.objective.id);
-          final live = idx == -1 ? widget.objective : list[idx];
-          final current = live.getCompletedAmount(widget.selectedDate);
-          final newAmount = current + m;
-          provider.updateObjectiveAmountForDate(
-            widget.selectedDate,
-            widget.objective.id,
-            newAmount,
+  void _openStopwatchOverlay(
+    BuildContext context,
+    ObjectiveProvider provider,
+  ) {
+    Navigator.of(context).push(
+      PageRouteBuilder<void>(
+        transitionDuration: const Duration(milliseconds: 420),
+        opaque: false,
+        barrierColor: Colors.transparent,
+        pageBuilder: (_, __, ___) {
+          return _StopwatchHeroOverlay(
+            heroTag: 'objective_${widget.objective.id}',
+            child: StopwatchSheet(
+              title: widget.objective.title,
+              targetMinutes: widget.objective.targetAmount,
+              onLogMinutes: (m) {
+                final list = provider.getObjectivesForDay(widget.selectedDate);
+                final idx = list.indexWhere((o) => o.id == widget.objective.id);
+                final live = idx == -1 ? widget.objective : list[idx];
+                final current = live.getCompletedAmount(widget.selectedDate);
+                final newAmount = current + m;
+                provider.updateObjectiveAmountForDate(
+                  widget.selectedDate,
+                  widget.objective.id,
+                  newAmount,
+                );
+              },
+              onMarkComplete: () {
+                _armCompleteEffects = true;
+
+                final catName = _primaryCategoryName();
+                final before = _lookupCategoryXp(provider, catName);
+
+                final live = _liveObjective(provider);
+                if (!live.isCompleted) {
+                  provider.toggleObjectiveCompletion(
+                    widget.selectedDate,
+                    widget.objective.id,
+                  );
+                }
+
+                _playConfettiLocal();
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  _Sfx.instance.playComplete();
+                  _armCompleteEffects = false;
+                });
+
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  final p2 = context.read<ObjectiveProvider>();
+                  final after = _lookupCategoryXp(p2, catName);
+                  if (after > before) {
+                    xpoverlay.XpGainBottomBar.show(
+                      context,
+                      label: (catName ?? 'TOTAL').toUpperCase(),
+                      fromXp: before,
+                      toXp: after,
+                      color: _catColor(catName),
+                    );
+                    XpBarJumpNotification(
+                      categoryName: catName,
+                      fromXp: before,
+                      toXp: after,
+                    ).dispatch(context);
+                  }
+                });
+              },
+            ),
           );
         },
-        onMarkComplete: () {
-          _armCompleteEffects = true;
-
-          final catName = _primaryCategoryName();
-          final before = _lookupCategoryXp(provider, catName);
-
-          final live = _liveObjective(provider);
-          if (!live.isCompleted) {
-            provider.toggleObjectiveCompletion(
-              widget.selectedDate,
-              widget.objective.id,
-            );
-          }
-
-          _playConfettiLocal();
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _Sfx.instance.playComplete();
-            _armCompleteEffects = false;
-          });
-
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            final p2 = context.read<ObjectiveProvider>();
-            final after = _lookupCategoryXp(p2, catName);
-            if (after > before) {
-              xpoverlay.XpGainBottomBar.show(
-                context,
-                label: (catName ?? 'TOTAL').toUpperCase(),
-                fromXp: before,
-                toXp: after,
-                color: _catColor(catName),
-              );
-              XpBarJumpNotification(
-                categoryName: catName,
-                fromXp: before,
-                toXp: after,
-              ).dispatch(context);
-            }
-          });
-        },
       ),
+    );
+  }
+}
+
+class _StopwatchHeroOverlay extends StatelessWidget {
+  final String heroTag;
+  final Widget child;
+
+  const _StopwatchHeroOverlay({
+    required this.heroTag,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final animation = ModalRoute.of(context)?.animation ?? kAlwaysCompleteAnimation;
+    return AnimatedBuilder(
+      animation: animation,
+      builder: (context, _) {
+        final opacity = Curves.easeOutCubic.transform(animation.value);
+        return Scaffold(
+          backgroundColor: Colors.black.withOpacity(0.55 * opacity),
+          body: SafeArea(
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => Navigator.of(context).maybePop(),
+                    child: const SizedBox.shrink(),
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.center,
+                  child: Hero(
+                    tag: heroTag,
+                    child: Material(
+                      color: Colors.transparent,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 420),
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: kObjectiveCardBg,
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(color: Colors.white.withValues(alpha: .08)),
+                          ),
+                          child: child,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: 12,
+                  right: 12,
+                  child: IconButton(
+                    style: IconButton.styleFrom(
+                      backgroundColor: Colors.black.withOpacity(0.35),
+                    ),
+                    onPressed: () => Navigator.of(context).maybePop(),
+                    icon: const Icon(Icons.close, color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

@@ -26,18 +26,15 @@ import 'package:kontinuum/ui/objective_type_handlers/objective_type_factory.dart
 import 'package:kontinuum/ui/widgets/add_item_fab.dart';
 import 'package:kontinuum/ui/widgets/calendar/calendar_fullscreen_page.dart';
 // Budget + Level utils
+import 'package:kontinuum/ui/screens/budget/budget_focus.dart';
 import 'package:kontinuum/ui/screens/budget/budget_screen_v2.dart';
 import 'package:kontinuum/ui/screens/budget/budget_screen_theme.dart';
 import 'package:kontinuum/data/level_utils.dart';
-
-// Diet (updated to point at the new screen)
-import 'package:kontinuum/ui/screens/diet/diet_dashboard_screen.dart';
 
 // STREAK (only the chip in category sections)
 import 'package:kontinuum/ui/widgets/streak/category_claim_chip.dart';
 
 // Workout (FAB + right-edge gesture)
-import 'package:kontinuum/config/feature_flags.dart';
 import 'package:kontinuum/ui/workout/workout_dashboard_screen.dart';
 
 // 🔥 NEW: organization screen moved out
@@ -46,13 +43,15 @@ import 'package:kontinuum/ui/screens/alignment_flow_page.dart';
 import 'package:kontinuum/ui/screens/mission_board_screen.dart';
 import 'package:kontinuum/ui/workout/session_screen.dart';
 import 'package:kontinuum/ui/workout/session_screen_args.dart';
+import 'package:kontinuum/ui/screens/day_detail_page.dart';
+import 'package:kontinuum/ui/screens/create_objective_screen2.dart';
 
 import 'package:kontinuum/ui/screens/data_management_sheet.dart';
 import 'package:kontinuum/services/backup/data_backup_service.dart';
 import 'package:kontinuum/services/backup/local_file_backup_transport.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:kontinuum/services/backup/local_file_backup_transport.dart';
 import 'package:kontinuum/core/time/app_clock.dart';
+import 'package:kontinuum/core/streaks/streak_engine.dart';
 import 'package:kontinuum/models/app_notification.dart';
 
 /// ===== Color palette: BLACK + BLUE-BLACK =====
@@ -99,6 +98,13 @@ class _ProgressScreenState extends State<ProgressScreen>
   double? _dragStartY;
 
   final XpLevelBarController _xpBarCtrl = XpLevelBarController();
+  final ValueNotifier<int?> _budgetRingPageJump = ValueNotifier<int?>(null);
+  final ValueNotifier<BudgetFocusTarget?> _budgetFocusSignal =
+      ValueNotifier<BudgetFocusTarget?>(null);
+  final ValueNotifier<BudgetBillFocus?> _budgetBillFocusSignal =
+      ValueNotifier<BudgetBillFocus?>(null);
+  final ValueNotifier<DateTime?> _workoutDateSignal =
+      ValueNotifier<DateTime?>(null);
 
   late final AnimationController _statsSlideCtrl;
   double? _statsDragStartGlobalY;
@@ -106,6 +112,7 @@ class _ProgressScreenState extends State<ProgressScreen>
   bool _backupBusy = false;
   AlignmentScheduleProvider? _alignmentProvider;
   bool _notificationCenterOpen = false;
+  bool _xpBarTapStartedOnPlus = false;
 
   @override
   void initState() {
@@ -146,6 +153,10 @@ class _ProgressScreenState extends State<ProgressScreen>
   void dispose() {
     _alignmentProvider?.removeListener(_handleAlignmentScheduleUpdate);
     _statsSlideCtrl.dispose();
+    _budgetRingPageJump.dispose();
+    _budgetFocusSignal.dispose();
+    _budgetBillFocusSignal.dispose();
+    _workoutDateSignal.dispose();
     super.dispose();
   }
 
@@ -164,6 +175,13 @@ class _ProgressScreenState extends State<ProgressScreen>
   }
 
   Future<void> _openMissionBoard() async {
+    await _openMissionBoardWithFocus();
+  }
+
+  Future<void> _openMissionBoardWithFocus({
+    String? missionId,
+    bool autoOpenDetail = false,
+  }) async {
     if (!mounted) return;
     await Navigator.of(context).push(
       PageRouteBuilder<void>(
@@ -171,13 +189,30 @@ class _ProgressScreenState extends State<ProgressScreen>
         reverseTransitionDuration: _pageTransitionDuration,
         opaque: false,
         barrierColor: Colors.transparent,
-        pageBuilder: (_, __, ___) =>
-            const MissionBoardScreen(skipIntroAnimation: true),
+        pageBuilder: (_, __, ___) => MissionBoardScreen(
+          skipIntroAnimation: true,
+          focusMissionId: missionId,
+          autoOpenMissionDetail: autoOpenDetail,
+        ),
         transitionsBuilder: (_, anim, __, child) {
           return FadeTransition(opacity: anim, child: child);
         },
       ),
     );
+  }
+
+  Future<void> _openWorkoutDay(DateTime day) async {
+    final normalized = DateKeys.dateOnly(day);
+    final objectiveProvider = context.read<ObjectiveProvider>();
+    objectiveProvider.selectedDateNotifier.value = normalized;
+    if (_notificationCenterOpen) {
+      await Navigator.of(context).maybePop();
+    }
+    await _goToWorkoutPage();
+    // Nudge the dashboard after the page transition kicks in.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _workoutDateSignal.value = normalized;
+    });
   }
 
   void _setFabMenuExpanded(bool expanded) {
@@ -609,11 +644,41 @@ class _ProgressScreenState extends State<ProgressScreen>
     _statsSlideCtrl.fling(velocity: shouldOpen ? 2.0 : -2.0);
   }
 
+  void _handleXpBarTapDown(TapDownDetails details) {
+    _xpBarTapStartedOnPlus =
+        _xpBarCtrl.isPointInsidePlusBadge(details.globalPosition);
+  }
+
+  void _handleXpBarTapUp(TapUpDetails details) {
+    final bool tappedPlus = _xpBarTapStartedOnPlus ||
+        _xpBarCtrl.isPointInsidePlusBadge(details.globalPosition);
+    _xpBarTapStartedOnPlus = false;
+    if (tappedPlus) {
+      _openCreateObjectiveFromXpBar();
+    } else {
+      _openStatsFully();
+    }
+  }
+
+  void _handleXpBarTapCancel() {
+    _xpBarTapStartedOnPlus = false;
+  }
+
   void _openStatsFully() {
     _statsSlideCtrl.animateTo(
       1.0,
       curve: Curves.easeOutCubic,
       duration: const Duration(milliseconds: 320),
+    );
+  }
+
+  Future<void> _openCreateObjectiveFromXpBar() async {
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const CreateObjectiveScreen2(),
+        fullscreenDialog: true,
+      ),
     );
   }
 
@@ -645,62 +710,6 @@ class _ProgressScreenState extends State<ProgressScreen>
       MaterialPageRoute<void>(
         builder: (_) => ObjectiveOrganizationScreen(day: day),
       ),
-    );
-  }
-
-  // ✅ NEW: temp gate for Project Manager access
-  void _openProjectManager() {
-    showDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      barrierColor: Colors.black.withValues(alpha: .72),
-      builder: (ctx) {
-        return AlertDialog(
-          backgroundColor: AppPalette.surface,
-          surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(22),
-            side: const BorderSide(color: AppPalette.outline),
-          ),
-          title: const Text(
-            'Coming Soon',
-            style: TextStyle(
-              color: AppPalette.onSurface,
-              fontSize: 20,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.1,
-            ),
-          ),
-          content: const Text(
-            'The Project Manager is still a work in progress. Please check back soon!',
-            style: TextStyle(
-              color: AppPalette.subtext,
-              fontSize: 15,
-              height: 1.4,
-            ),
-          ),
-          actionsPadding: const EdgeInsets.only(right: 12, bottom: 10),
-          actions: [
-            TextButton(
-              style: TextButton.styleFrom(
-                backgroundColor: AppPalette.addPurple.withValues(alpha: .28),
-                foregroundColor: AppPalette.onSurface,
-                textStyle: const TextStyle(
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.2,
-                ),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Got it'),
-            ),
-          ],
-        );
-      },
     );
   }
 
@@ -741,6 +750,10 @@ class _ProgressScreenState extends State<ProgressScreen>
               heroTag: _notificationPopupHeroTag,
               onResetAlignment: () =>
                   context.read<AlignmentScheduleProvider>().resetTodayProgress(),
+              onNotificationTap: _handleNotificationTap,
+              onOpenBudgetBalance: _openBudgetBalanceFromNotification,
+              onOpenMissionBoard: _openMissionBoardFromNotificationWithFocus,
+              onOpenWorkoutDay: _openWorkoutDay,
             ),
           );
         },
@@ -750,6 +763,142 @@ class _ProgressScreenState extends State<ProgressScreen>
       _notificationCenterOpen = false;
       alignmentProvider.reevaluate();
     });
+  }
+
+  Future<void> _handleNotificationTap(
+    NotificationItem item, {
+    bool autoCompleteTask = false,
+  }) async {
+    if (!_shouldOpenDaySchedule(item.kind)) return;
+    final DateTime targetDay = _resolveNotificationDay(item);
+    final bool isTask = item.kind == NotificationKind.taskDueToday;
+    final String? focusTaskId =
+        isTask ? _taskIdFromPayload(item.payload) : null;
+    final String? autoCompleteTaskId =
+        autoCompleteTask ? focusTaskId : null;
+
+    if (_notificationCenterOpen) {
+      await Navigator.of(context).maybePop();
+    }
+    if (!mounted) return;
+
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => DayDetailPage(
+          day: targetDay,
+          startInSchedule: true,
+          focusTaskId: focusTaskId,
+          autoCompleteTaskId: autoCompleteTaskId,
+        ),
+        settings: const RouteSettings(
+          name: 'day_detail_from_notification',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openBudgetBalanceFromNotification({
+    BudgetFocusTarget? focusTarget,
+    BudgetBillFocus? billFocus,
+    int? ringPage,
+  }) async {
+    if (_notificationCenterOpen) {
+      await Navigator.of(context).maybePop();
+    }
+    await _goToBudgetPage();
+    _budgetRingPageJump.value = ringPage ?? 0;
+    if (focusTarget != null) {
+      _budgetFocusSignal.value = focusTarget;
+    }
+    if (billFocus != null) {
+      _budgetBillFocusSignal.value = billFocus;
+    }
+  }
+
+  Future<void> _openMissionBoardFromNotificationWithFocus({
+    String? missionId,
+    bool? autoOpenDetail,
+  }) async {
+    if (_notificationCenterOpen) {
+      await Navigator.of(context).maybePop();
+    }
+    await _openMissionBoardWithFocus(
+      missionId: missionId,
+      autoOpenDetail: autoOpenDetail ?? false,
+    );
+  }
+
+  bool _shouldOpenDaySchedule(NotificationKind kind) {
+    switch (kind) {
+      case NotificationKind.taskDueToday:
+      case NotificationKind.eventStartingSoon:
+      case NotificationKind.reminderDue:
+      case NotificationKind.overlappingEvents:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  DateTime _resolveNotificationDay(NotificationItem item) {
+    final fromPayload = _parseNotificationDay(item.payload);
+    return fromPayload ?? DateKeys.dateOnly(item.createdAt);
+  }
+
+  DateTime? _parseNotificationDay(Map<String, dynamic>? payload) {
+    if (payload == null) return null;
+    for (final key in const [
+      'dateYmd',
+      'dayYmd',
+      'day',
+      'dueDate',
+      'dueOn',
+      'dueYmd',
+      'eventDate',
+      'eventYmd',
+      'startYmd',
+      'startDate',
+      'startDateYmd',
+    ]) {
+      final value = payload[key];
+      final parsed = _coercePayloadDay(value);
+      if (parsed != null) return parsed;
+    }
+    return null;
+  }
+
+  DateTime? _coercePayloadDay(dynamic value) {
+    if (value == null) return null;
+    if (value is DateTime) {
+      return DateKeys.dateOnly(value);
+    }
+    if (value is String && value.isNotEmpty) {
+      if (DateKeys.ymdRegex.hasMatch(value)) {
+        return DateKeys.fromYmd(value);
+      }
+      final parsed = DateTime.tryParse(value);
+      if (parsed != null) {
+        return DateKeys.dateOnly(parsed);
+      }
+    }
+    if (value is int && value > 0) {
+      final bool looksMillis = value > 100000000000;
+      final millis = looksMillis ? value : value * 1000;
+      final dt = DateTime.fromMillisecondsSinceEpoch(millis);
+      return DateKeys.dateOnly(dt);
+    }
+    return null;
+  }
+
+  String? _taskIdFromPayload(Map<String, dynamic>? payload) {
+    if (payload == null) return null;
+    for (final key in const ['taskId', 'task_id', 'taskID', 'id']) {
+      final raw = payload[key];
+      if (raw is String && raw.trim().isNotEmpty) {
+        return raw.trim();
+      }
+    }
+    return null;
   }
 
 
@@ -825,45 +974,54 @@ class _ProgressScreenState extends State<ProgressScreen>
           ),
           floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
           floatingActionButton: _pageIndex == _progressPageIndex
-              ? Padding(
-                  padding: const EdgeInsets.only(
-                    bottom: _listBottomInsetForXpBar - 24,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      AnimatedCrossFade(
-                        firstChild: const SizedBox.shrink(),
-                        secondChild: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            ..._buildFabMenuButtons(),
-                            const SizedBox(height: 12),
-                          ],
+              ? AnimatedBuilder(
+                  animation: _statsSlideCtrl,
+                  builder: (context, child) {
+                    if (_statsSlideCtrl.value > 0.01) {
+                      return const SizedBox.shrink();
+                    }
+                    return child!;
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.only(
+                      bottom: _listBottomInsetForXpBar - 24,
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        AnimatedCrossFade(
+                          firstChild: const SizedBox.shrink(),
+                          secondChild: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              ..._buildFabMenuButtons(),
+                              const SizedBox(height: 12),
+                            ],
+                          ),
+                          crossFadeState: _fabMenuExpanded
+                              ? CrossFadeState.showSecond
+                              : CrossFadeState.showFirst,
+                          duration: const Duration(milliseconds: 200),
+                          sizeCurve: Curves.easeOutCubic,
                         ),
-                        crossFadeState: _fabMenuExpanded
-                            ? CrossFadeState.showSecond
-                            : CrossFadeState.showFirst,
-                        duration: const Duration(milliseconds: 200),
-                        sizeCurve: Curves.easeOutCubic,
-                      ),
-                      FloatingActionButton(
-                        heroTag: 'fab_toggle_menu',
-                        backgroundColor: _fabMenuExpanded
-                            ? AppPalette.surface
-                            : const Color(0xFF1E88E5),
-                        foregroundColor: Colors.white,
-                        tooltip: _fabMenuExpanded
-                            ? 'Hide quick actions'
-                            : 'Show quick actions',
-                        onPressed: _toggleFabMenu,
-                        child: Icon(
-                          _fabMenuExpanded ? Icons.close : Icons.menu,
+                        FloatingActionButton(
+                          heroTag: 'fab_toggle_menu',
+                          backgroundColor: _fabMenuExpanded
+                              ? AppPalette.surface
+                              : const Color(0xFF1E88E5),
+                          foregroundColor: Colors.white,
+                          tooltip: _fabMenuExpanded
+                              ? 'Hide quick actions'
+                              : 'Show quick actions',
+                          onPressed: _toggleFabMenu,
+                          child: Icon(
+                            _fabMenuExpanded ? Icons.close : Icons.menu,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 )
               : null,
@@ -996,9 +1154,9 @@ class _ProgressScreenState extends State<ProgressScreen>
           color: budgetBackgroundColor,
           child: RepaintBoundary(
             child: BudgetScreenV2(
-              onClose: () {
-                if (mounted) _goToProgress();
-              },
+              ringPageJumpSignal: _budgetRingPageJump,
+              focusSignal: _budgetFocusSignal,
+              billFocusSignal: _budgetBillFocusSignal,
             ),
           ),
         ),
@@ -1014,6 +1172,7 @@ class _ProgressScreenState extends State<ProgressScreen>
             onClose: () {
               if (mounted) _goToProgress();
             },
+            dateSignal: _workoutDateSignal,
           ),
         ),
       );
@@ -1103,11 +1262,12 @@ class _ProgressScreenState extends State<ProgressScreen>
                   onVerticalDragStart: _statsDragStart,
                   onVerticalDragUpdate: _statsDragUpdate,
                   onVerticalDragEnd: _statsDragEnd,
-                  onTap: _openStatsFully,
+                  onTapDown: _handleXpBarTapDown,
+                  onTapUp: _handleXpBarTapUp,
+                  onTapCancel: _handleXpBarTapCancel,
                   child: XpLevelBar(
                     controller: _xpBarCtrl,
                     onStatsPressed: _openStatsFully,
-                    onProjectsPressed: _openProjectManager,
                   ),
                 ),
               ],
@@ -1130,11 +1290,12 @@ class _ProgressScreenState extends State<ProgressScreen>
                 onVerticalDragStart: _statsDragStart,
                 onVerticalDragUpdate: _statsDragUpdate,
                 onVerticalDragEnd: _statsDragEnd,
-                onTap: _openStatsFully,
+                onTapDown: _handleXpBarTapDown,
+                onTapUp: _handleXpBarTapUp,
+                onTapCancel: _handleXpBarTapCancel,
                 child: XpLevelBar(
                   controller: _xpBarCtrl,
                   onStatsPressed: _openStatsFully,
-                  onProjectsPressed: _openProjectManager,
                 ),
               ),
             ],
@@ -1244,6 +1405,7 @@ class _RescheduleSheetState extends State<_RescheduleSheet> {
     final routine = wp.getRoutineById(widget.routineId);
     return SafeArea(
       top: false,
+      bottom: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
         child: Column(
@@ -1313,7 +1475,7 @@ class _RescheduleSheetState extends State<_RescheduleSheet> {
                         children: [
                           Text(
                             DateFormat.E().format(day),
-                            style: TextStyle(
+                            style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.w700,
                               fontSize: 12,
@@ -1337,7 +1499,7 @@ class _RescheduleSheetState extends State<_RescheduleSheet> {
                 },
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 28),
             Row(
               children: [
                 Expanded(
@@ -1354,19 +1516,22 @@ class _RescheduleSheetState extends State<_RescheduleSheet> {
                         : () async {
                             final delta =
                                 _selected.difference(_anchor).inDays;
+                            final workoutProvider = context.read<WorkoutProvider>();
+                            final navigator = Navigator.of(context);
                             if (delta != 0) {
                               await WorkoutProgressService.shiftRoutineSchedule(
                                 routine: routine,
                                 deltaDays: delta,
                               );
-                              await context
-                                  .read<WorkoutProvider>()
-                                  .emitScheduleNotifications(
-                                    routineId: routine.id,
-                                    now: _selected,
-                                  );
+                              if (mounted) {
+                                await workoutProvider
+                                    .emitScheduleNotifications(
+                                      routineId: routine.id,
+                                      now: _selected,
+                                    );
+                              }
                             }
-                            if (mounted) Navigator.of(context).maybePop();
+                            if (mounted) navigator.maybePop();
                           },
                     child: const Text('Shift schedule'),
                   ),
@@ -1438,6 +1603,81 @@ class _DayCircle extends StatelessWidget {
     );
   }
 }
+
+class _RescheduleHeroPopup extends StatelessWidget {
+  const _RescheduleHeroPopup({
+    required this.heroTag,
+    required this.routineId,
+    this.missedDate,
+  });
+
+  final String heroTag;
+  final String routineId;
+  final DateTime? missedDate;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: Stack(
+        children: [
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => Navigator.of(context).maybePop(),
+            child: Container(
+              color: Colors.black.withValues(alpha: .45),
+            ),
+          ),
+          Center(
+            child: Material(
+              color: Colors.transparent,
+              child: FadeTransition(
+                opacity: CurvedAnimation(
+                  parent: ModalRoute.of(context)!.animation!,
+                  curve: Curves.easeOutCubic,
+                  reverseCurve: Curves.easeInCubic,
+                ),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final double maxWidth =
+                        (constraints.maxWidth - 32).clamp(0.0, 440.0);
+                    return Center(
+                      child: Container(
+                        width: maxWidth,
+                        margin: const EdgeInsets.symmetric(horizontal: 16),
+                        decoration: BoxDecoration(
+                          color: AppPalette.surface,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: .12),
+                          ),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Color(0x66000000),
+                              blurRadius: 20,
+                              offset: Offset(0, 10),
+                            ),
+                          ],
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(18),
+                          child: _RescheduleSheet(
+                            routineId: routineId,
+                            missedDate: missedDate,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 class _CompactDayStreakStrip extends StatelessWidget {
   const _CompactDayStreakStrip({
     required this.viewingDay,
@@ -1450,79 +1690,76 @@ class _CompactDayStreakStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<ObjectiveProvider>();
+    final streakEngine = context.read<StreakEngine>();
 
-    final DateTime today = _strip(AppClock.now());
     final DateTime day = _strip(viewingDay);
 
     final viewingState = provider.getTodayState(day);
     final int done = viewingState.completedObjectives;
     final int total = viewingState.activeObjectives;
 
-    final datesSet = <DateTime>{
-      ...provider.getAllTrackedDates().map(_strip),
-      day,
-      today,
-    };
-    final dates = datesSet.toList()..sort();
+    return ValueListenableBuilder(
+      valueListenable: streakEngine.dayListenable(),
+      builder: (_, __, ___) {
+        final streak = streakEngine.getDayStreak().current;
 
-    final DateTime? anchor = _findLatestKeptDay(provider, dates);
-    final int streak = anchor != null ? _walkBack(provider, dates, anchor) : 0;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
-      child: Row(
-        children: [
-          Container(
-            width: 26,
-            height: 26,
-            decoration: BoxDecoration(
-              color: Colors.orange.withValues(alpha: .16),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.local_fire_department,
-              color: Colors.orange,
-              size: 16,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'Day streak · $streak day${streak == 1 ? '' : 's'}',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: AppPalette.onSurface,
-                  ),
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
+          child: Row(
+            children: [
+              Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  color: Colors.orange.withValues(alpha: .16),
+                  shape: BoxShape.circle,
                 ),
-                Text(
-                  'Progress ${_fmt(day)}: $done / $total',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: AppPalette.onSurface.withValues(alpha: .45),
-                  ),
+                child: const Icon(
+                  Icons.local_fire_department,
+                  color: Colors.orange,
+                  size: 16,
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Day streak · $streak day${streak == 1 ? '' : 's'}',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: AppPalette.onSurface,
+                      ),
+                    ),
+                    Text(
+                      'Progress ${_fmt(day)}: $done / $total',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: AppPalette.onSurface.withValues(alpha: .45),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+                icon: const Icon(
+                  Icons.apps_rounded,
+                  size: 20,
+                  color: Colors.white38,
+                ),
+                tooltip: 'Organize objectives',
+                onPressed: onOrganizePressed,
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          IconButton(
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints.tightFor(width: 32, height: 32),
-            icon: const Icon(
-              Icons.apps_rounded,
-              size: 20,
-              color: Colors.white38,
-            ),
-            tooltip: 'Organize objectives',
-            onPressed: onOrganizePressed,
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -1536,46 +1773,6 @@ class _CompactDayStreakStrip extends StatelessWidget {
     return '${d.month}/${d.day}';
   }
 
-  static DateTime? _findLatestKeptDay(
-    ObjectiveProvider provider,
-    List<DateTime> sortedDates,
-  ) {
-    for (int i = sortedDates.length - 1; i >= 0; i--) {
-      final d = sortedDates[i];
-      if (_isKept(provider, d)) {
-        return d;
-      }
-    }
-    return null;
-  }
-
-  static int _walkBack(
-    ObjectiveProvider provider,
-    List<DateTime> sortedDates,
-    DateTime anchor,
-  ) {
-    int count = 1;
-    final idx = sortedDates.lastIndexOf(anchor);
-    for (int i = idx - 1; i >= 0; i--) {
-      final prev = sortedDates[i];
-      final diff = anchor.difference(prev).inDays;
-      if (diff != 1) break;
-      if (!_isKept(provider, prev)) break;
-      count += 1;
-      anchor = prev;
-    }
-    return count;
-  }
-
-  static bool _isKept(ObjectiveProvider provider, DateTime day) {
-    final s = provider.getTodayState(day);
-    final hasTasks = s.activeObjectives > 0;
-    if (hasTasks) {
-      return s.completedObjectives >= s.activeObjectives;
-    } else {
-      return s.rawMinutes > 0;
-    }
-  }
 }
 
 class _KeepAlive extends StatefulWidget {
@@ -1918,16 +2115,40 @@ class _NotificationCenterIconButton extends StatelessWidget {
   }
 }
 
+typedef NotificationTapCallback = Future<void> Function(
+  NotificationItem item, {
+  bool autoCompleteTask,
+});
+
+typedef BudgetOpenCallback = Future<void> Function({
+  BudgetFocusTarget? focusTarget,
+  BudgetBillFocus? billFocus,
+  int? ringPage,
+});
+
+typedef MissionOpenCallback = Future<void> Function({
+  String? missionId,
+  bool? autoOpenDetail,
+});
+
+typedef WorkoutDayOpenCallback = Future<void> Function(DateTime day);
+
 class _NotificationCenterPopup extends StatefulWidget {
   const _NotificationCenterPopup({
     required this.heroTag,
     required this.onResetAlignment,
-    this.showResetButton = true,
+    this.onNotificationTap,
+    this.onOpenBudgetBalance,
+    this.onOpenMissionBoard,
+    this.onOpenWorkoutDay,
   });
 
   final String heroTag;
   final Future<void> Function() onResetAlignment;
-  final bool showResetButton;
+  final NotificationTapCallback? onNotificationTap;
+  final BudgetOpenCallback? onOpenBudgetBalance;
+  final MissionOpenCallback? onOpenMissionBoard;
+  final WorkoutDayOpenCallback? onOpenWorkoutDay;
 
   @override
   State<_NotificationCenterPopup> createState() =>
@@ -2011,24 +2232,320 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
       case NotificationModule.calendar:
         return const Color(0xFFA78BFA);
       case NotificationModule.tasks:
-      default:
         return const Color(0xFF90CAF9);
     }
   }
 
-  String _moduleLabel(NotificationModule module) {
-    switch (module) {
-      case NotificationModule.workouts:
-        return 'Workouts';
-      case NotificationModule.missions:
-        return 'Missions';
-      case NotificationModule.budget:
-        return 'Budget';
-      case NotificationModule.calendar:
-        return 'Calendar';
-      case NotificationModule.tasks:
+  String _notificationHeroTag(NotificationItem item) => 'notif_${item.id}';
+
+  bool _routesToDaySchedule(NotificationItem item) {
+    switch (item.kind) {
+      case NotificationKind.taskDueToday:
+      case NotificationKind.eventStartingSoon:
+      case NotificationKind.reminderDue:
+      case NotificationKind.overlappingEvents:
+        return true;
       default:
-        return 'Tasks';
+        return false;
+    }
+  }
+
+  bool _routesToBudget(NotificationItem item) {
+    if (item.module != NotificationModule.budget) return false;
+    switch (item.kind) {
+      case NotificationKind.lowBalanceForBill:
+      case NotificationKind.categoryOverBudget:
+      case NotificationKind.billUpcoming:
+      case NotificationKind.billOverdue:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  bool _routesToWorkout(NotificationItem item) {
+    if (item.module != NotificationModule.workouts) return false;
+    switch (item.kind) {
+      case NotificationKind.missedWorkout:
+      case NotificationKind.sessionInProgress:
+      case NotificationKind.restDayReminder:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  bool _routesToMissions(NotificationItem item) {
+    if (item.module != NotificationModule.missions) return false;
+    switch (item.kind) {
+      case NotificationKind.missionOverdue:
+      case NotificationKind.missionRefresh:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  BudgetFocusTarget? _budgetFocusTargetFor(NotificationItem item) {
+    switch (item.kind) {
+      case NotificationKind.billUpcoming:
+      case NotificationKind.billOverdue:
+        return BudgetFocusTarget.upcomingBills;
+      default:
+        return null;
+    }
+  }
+
+  bool _wantsBillDetail(NotificationKind kind) {
+    switch (kind) {
+      case NotificationKind.billUpcoming:
+      case NotificationKind.billOverdue:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  int? _ringPageFor(NotificationKind kind) {
+    switch (kind) {
+      case NotificationKind.lowBalanceForBill:
+        return 0; // Bank balances page
+      case NotificationKind.categoryOverBudget:
+        return 1; // Budget ring
+      default:
+        return null;
+    }
+  }
+
+  BudgetBillFocus? _billFocusFromNotification(NotificationItem item) {
+    if (item.module != NotificationModule.budget) return null;
+    final payload = item.payload ?? const <String, dynamic>{};
+    final key = _firstString(payload, const ['billKey', 'bill_key', 'key']);
+    final budgetId =
+        _firstString(payload, const ['budgetId', 'budget_id', 'budgetID']);
+    final billId =
+        _firstString(payload, const ['billId', 'bill_id', 'billID', 'id']);
+    final bundledId = _firstId(payload['ids']);
+    final name = _firstString(
+          payload,
+          const ['billName', 'name', 'title'],
+        ) ??
+        _billNameFromDetail(item.detail);
+    final amountCents =
+        _parseAmountCents(payload['amountCents'], assumeCents: true) ??
+            _parseAmountCents(payload['amount']) ??
+            _parseAmountCents(payload['total']) ??
+            _parseAmountFromDetail(item.detail);
+    final dueDate = _parseBillDueDate(payload);
+
+    final combinedKey = key ?? billId ?? bundledId;
+    final focus = BudgetBillFocus(
+      billKey: combinedKey,
+      budgetId: budgetId,
+      name: name,
+      amountCents: amountCents,
+      dueDate: dueDate,
+    );
+    return focus.hasData ? focus : null;
+  }
+
+  String? _firstString(
+    Map<String, dynamic> payload,
+    List<String> keys,
+  ) {
+    for (final key in keys) {
+      final value = payload[key];
+      if (value is String && value.trim().isNotEmpty) {
+        return value.trim();
+      }
+    }
+    return null;
+  }
+
+  String? _firstId(dynamic raw) {
+    if (raw is List) {
+      for (final value in raw) {
+        if (value is String && value.trim().isNotEmpty) {
+          return value.trim();
+        }
+      }
+    }
+    return null;
+  }
+
+  DateTime? _parseBillDueDate(Map<String, dynamic>? payload) {
+    if (payload == null) return null;
+    for (final key in const [
+      'dueDate',
+      'dueOn',
+      'due',
+      'dueYmd',
+      'due_ymd',
+      'dueTs',
+      'due_ts',
+      'due_date',
+      'dueDateIso',
+      'dueDateMs',
+      'dueDateMillis',
+      'date',
+      'dateYmd',
+      'billDue',
+    ]) {
+      final parsed = _coerceBillDate(payload[key]);
+      if (parsed != null) return parsed;
+    }
+    return null;
+  }
+
+  DateTime? _coerceBillDate(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is DateTime) {
+      return DateKeys.dateOnly(raw);
+    }
+    if (raw is String) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) return null;
+      if (DateKeys.ymdRegex.hasMatch(trimmed)) {
+        return DateKeys.fromYmd(trimmed);
+      }
+      final parsed = DateTime.tryParse(trimmed);
+      if (parsed != null) return DateKeys.dateOnly(parsed);
+      final digits = trimmed.replaceAll(RegExp(r'[^0-9]'), '');
+      if (digits.isNotEmpty) {
+        final millis = int.tryParse(digits);
+        if (millis != null) {
+          final isMillis = digits.length > 10;
+          final dt = DateTime.fromMillisecondsSinceEpoch(
+            isMillis ? millis : millis * 1000,
+          );
+          return DateKeys.dateOnly(dt);
+        }
+      }
+    }
+    if (raw is int) {
+      final isMillis = raw > 100000000000;
+      final dt =
+          DateTime.fromMillisecondsSinceEpoch(isMillis ? raw : raw * 1000);
+      return DateKeys.dateOnly(dt);
+    }
+    if (raw is double) {
+      final millis = raw.round();
+      final isMillis = millis > 100000000000;
+      final dt = DateTime.fromMillisecondsSinceEpoch(
+        isMillis ? millis : millis * 1000,
+      );
+      return DateKeys.dateOnly(dt);
+    }
+    return null;
+  }
+
+  int? _parseAmountCents(
+    dynamic raw, {
+    bool assumeCents = false,
+  }) {
+    if (raw == null) return null;
+    if (raw is int) {
+      return assumeCents ? raw : (raw * 100);
+    }
+    if (raw is double) {
+      return assumeCents ? raw.round() : (raw * 100).round();
+    }
+    if (raw is String) {
+      final cleaned = raw.replaceAll(RegExp(r'[^0-9.-]'), '');
+      if (cleaned.isEmpty) return null;
+      final value = double.tryParse(cleaned);
+      if (value == null) return null;
+      if (assumeCents) return value.round();
+      return (value * 100).round();
+    }
+    return null;
+  }
+
+  int? _parseAmountFromDetail(String detail) {
+    final match =
+        RegExp(r'([-+]?[0-9]*\.?[0-9]+)').firstMatch(detail.replaceAll(',', ''));
+    if (match == null) return null;
+    final value = double.tryParse(match.group(1) ?? '');
+    if (value == null) return null;
+    return (value * 100).round();
+  }
+
+  String? _billNameFromDetail(String detail) {
+    final parts = detail.split(RegExp(r'[·•|-]'));
+    if (parts.isEmpty) return null;
+    final candidate = parts.first.trim();
+    return candidate.isEmpty ? null : candidate;
+  }
+
+  String? _missionIdFromNotification(NotificationItem item) {
+    final payload = item.payload ?? const <String, dynamic>{};
+    final missionId = _firstString(
+      payload,
+      const ['missionId', 'mission_id', 'missionID', 'id'],
+    );
+    return missionId ?? _firstId(payload['ids']);
+  }
+
+  VoidCallback? _buildPillTapHandler(NotificationItem item) {
+    if (_disableCardTap(item)) return null;
+    if (_routesToDaySchedule(item) && widget.onNotificationTap != null) {
+      return () => widget.onNotificationTap!(item);
+    }
+    if (_routesToBudget(item) && widget.onOpenBudgetBalance != null) {
+      final focus = _budgetFocusTargetFor(item);
+      final billFocus =
+          _wantsBillDetail(item.kind) ? _billFocusFromNotification(item) : null;
+      final ringPage = _ringPageFor(item.kind);
+      return () => widget.onOpenBudgetBalance!(
+            focusTarget: focus,
+            billFocus: billFocus,
+            ringPage: ringPage,
+          );
+    }
+    if (_routesToWorkout(item)) {
+      if (item.kind == NotificationKind.sessionInProgress) {
+        return () => _openWorkoutFromNotification(item.payload);
+      }
+      if (item.kind == NotificationKind.missedWorkout &&
+          widget.onOpenWorkoutDay != null) {
+        final targetDay = _scheduledDayFromPayload(item.payload) ??
+            DateKeys.dateOnly(item.createdAt);
+        return () => widget.onOpenWorkoutDay!(targetDay);
+      }
+      if (item.kind == NotificationKind.restDayReminder &&
+          widget.onOpenWorkoutDay != null) {
+        final today = DateKeys.dateOnly(AppClock.now());
+        return () => widget.onOpenWorkoutDay!(today);
+      }
+    }
+    if (_routesToMissions(item) && widget.onOpenMissionBoard != null) {
+      final missionId = _missionIdFromNotification(item);
+      final autoDetail = item.kind == NotificationKind.missionOverdue;
+      return () => widget.onOpenMissionBoard!(
+            missionId: missionId,
+            autoOpenDetail: autoDetail,
+          );
+    }
+    return null;
+  }
+
+  bool _disableCardTap(NotificationItem item) {
+    switch (item.kind) {
+      case NotificationKind.taskDueToday:
+      case NotificationKind.reminderDue:
+      case NotificationKind.eventStartingSoon:
+      case NotificationKind.lowBalanceForBill:
+      case NotificationKind.categoryOverBudget:
+      case NotificationKind.billOverdue:
+      case NotificationKind.billUpcoming:
+      case NotificationKind.missionRefresh:
+      case NotificationKind.missedWorkout:
+      case NotificationKind.restDayReminder:
+      case NotificationKind.missionOverdue:
+      case NotificationKind.overlappingEvents:
+        return true;
+      default:
+        return false;
     }
   }
 
@@ -2113,8 +2630,8 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
             },
           ),
           NotificationAction(
-            label: 'End',
-            type: NotificationActionType.end,
+            label: 'Dismiss',
+            type: NotificationActionType.dismiss,
           ),
         ],
         payload: const {
@@ -2196,8 +2713,8 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
             type: NotificationActionType.open,
           ),
           NotificationAction(
-            label: 'Snooze',
-            type: NotificationActionType.snooze,
+            label: 'Dismiss',
+            type: NotificationActionType.dismiss,
           ),
         ],
       ),
@@ -2272,7 +2789,7 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
         severity: NotificationSeverity.nonCritical,
         actions: const [
           NotificationAction(
-            label: 'Adjust',
+            label: 'View',
             type: NotificationActionType.open,
           ),
           NotificationAction(
@@ -2291,8 +2808,8 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
         severity: NotificationSeverity.critical,
         actions: const [
           NotificationAction(
-            label: 'Transfer',
-            type: NotificationActionType.pay,
+            label: 'View',
+            type: NotificationActionType.open,
           ),
           NotificationAction(
             label: 'Snooze',
@@ -2313,7 +2830,7 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
         expiresAt: now.add(const Duration(hours: 2)),
         actions: const [
           NotificationAction(
-            label: 'Join',
+            label: 'View',
             type: NotificationActionType.open,
           ),
           NotificationAction(
@@ -2321,6 +2838,10 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
             type: NotificationActionType.snooze,
           ),
         ],
+        payload: {
+          'eventId': 'demo_event_soon',
+          'dateYmd': DateKeys.ymd(now),
+        },
       ),
       NotificationItem(
         id: 'demo_reminder_due',
@@ -2332,14 +2853,18 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
         severity: NotificationSeverity.nonCritical,
         actions: const [
           NotificationAction(
-            label: 'Done',
-            type: NotificationActionType.complete,
+            label: 'View',
+            type: NotificationActionType.open,
           ),
           NotificationAction(
             label: 'Snooze',
             type: NotificationActionType.snooze,
           ),
         ],
+        payload: {
+          'reminderId': 'demo_reminder_due',
+          'dateYmd': DateKeys.ymd(now),
+        },
       ),
       NotificationItem(
         id: 'demo_overlap',
@@ -2351,7 +2876,7 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
         severity: NotificationSeverity.nonCritical,
         actions: const [
           NotificationAction(
-            label: 'Prioritize',
+            label: 'Reschedule',
             type: NotificationActionType.open,
           ),
           NotificationAction(
@@ -2359,6 +2884,9 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
             type: NotificationActionType.snooze,
           ),
         ],
+        payload: {
+          'dateYmd': DateKeys.ymd(now),
+        },
       ),
       NotificationItem(
         id: 'demo_task_due',
@@ -2378,6 +2906,10 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
             type: NotificationActionType.snooze,
           ),
         ],
+        payload: {
+          'taskId': 'demo_task_due',
+          'dateYmd': DateKeys.ymd(now),
+        },
       ),
     ]);
     if (!mounted) return;
@@ -2387,6 +2919,37 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
         duration: Duration(seconds: 2),
       ),
     );
+  }
+
+  DateTime? _parseYmdString(String? raw) {
+    if (raw == null) return null;
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return null;
+    final cleaned = trimmed.replaceAll(RegExp(r'[^0-9]'), '');
+    if (cleaned.length == 8) {
+      final y = int.tryParse(cleaned.substring(0, 4));
+      final m = int.tryParse(cleaned.substring(4, 6));
+      final d = int.tryParse(cleaned.substring(6, 8));
+      if (y != null && m != null && d != null) {
+        return DateTime(y, m, d);
+      }
+    }
+    final DateTime? parsed = DateTime.tryParse(trimmed);
+    if (parsed != null) {
+      return DateTime(parsed.year, parsed.month, parsed.day);
+    }
+    return null;
+  }
+
+  DateTime? _scheduledDayFromPayload(Map<String, dynamic>? payload) {
+    if (payload == null) return null;
+    final DateTime? fromYmd = _parseYmdString(
+      (payload['dateYmd'] ??
+              payload['scheduledDateYmd'] ??
+              payload['scheduledDate']) as String?,
+    );
+    if (fromYmd != null) return fromYmd;
+    return _parseYmdString(payload['scheduledDateIso'] as String?);
   }
 
   Future<void> _openWorkoutFromNotification(
@@ -2402,21 +2965,34 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
     }
     final wp = context.read<WorkoutProvider>();
     final today = AppClock.now();
-    final normalized = DateTime(today.year, today.month, today.day);
+    final DateTime normalized = DateTime(today.year, today.month, today.day);
+    final DateTime scheduledDay =
+        _scheduledDayFromPayload(payload) ?? normalized;
     final alreadyActive = wp.activeDraft?.workoutId == workoutId;
     if (!alreadyActive) {
-      wp.startSession(
+      final result = wp.startSession(
         routineId: routineId,
         workoutId: workoutId,
         source: 'notification_center',
+        calendarDayOverride: scheduledDay,
       );
+      if (!result.started) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result.message ?? 'Unable to start that workout right now.',
+            ),
+          ),
+        );
+        return;
+      }
     }
     final args = SessionScreenArgs(
       routineId: routineId,
       workoutId: workoutId,
       source: 'notification_center',
       attachToRoutineId: routineId,
-      scheduledDate: normalized,
+      scheduledDate: scheduledDay,
     );
 
     await Navigator.of(context).push(
@@ -2428,31 +3004,51 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
     );
   }
 
-  Future<void> _openRescheduleSheet(
+  Future<void> _openReschedulePopup(
+    NotificationItem item,
     Map<String, dynamic>? payload,
   ) async {
-    final routineId = payload?['routineId'] as String? ??
+    final workoutProvider = context.read<WorkoutProvider>();
+    String? routineIdMaybe = payload?['routineId'] as String?;
+    routineIdMaybe ??= workoutProvider.activeDraft?.routineId;
+    routineIdMaybe ??=
         context.read<FitnessProfileProvider>().profile?.currentRoutineId;
-    if (routineId == null) {
+    if (routineIdMaybe == null && workoutProvider.routines.isNotEmpty) {
+      routineIdMaybe = workoutProvider.routines.first.id;
+    }
+    if (routineIdMaybe == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Missing routine for reschedule')),
       );
       return;
     }
+    final String routineId = routineIdMaybe;
     DateTime? missedDate;
     final ymd = payload?['dateYmd'] as String?;
     if (ymd != null) {
       missedDate = DateTime.tryParse(ymd);
     }
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppPalette.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) => _RescheduleSheet(
-        routineId: routineId,
-        missedDate: missedDate,
+    await Navigator.of(context).push(
+      PageRouteBuilder<void>(
+        opaque: false,
+        barrierColor: Colors.black.withValues(alpha: .45),
+        transitionDuration: const Duration(milliseconds: 320),
+        reverseTransitionDuration: const Duration(milliseconds: 260),
+        pageBuilder: (_, __, ___) => _RescheduleHeroPopup(
+          heroTag: _notificationHeroTag(item),
+          routineId: routineId,
+          missedDate: missedDate,
+        ),
+        transitionsBuilder: (_, animation, __, child) {
+          return FadeTransition(
+            opacity: CurvedAnimation(
+              parent: animation,
+              curve: Curves.easeOutCubic,
+              reverseCurve: Curves.easeInCubic,
+            ),
+            child: child,
+          );
+        },
       ),
     );
   }
@@ -2474,23 +3070,92 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
         break;
       case NotificationActionType.resume:
       case NotificationActionType.open:
-        await _openWorkoutFromNotification(action.payload ?? item.payload);
+        if (item.module == NotificationModule.workouts) {
+          await _openWorkoutFromNotification(action.payload ?? item.payload);
+        } else if (item.module == NotificationModule.budget &&
+            widget.onOpenBudgetBalance != null) {
+          final focus = _budgetFocusTargetFor(item);
+          final billFocus = _wantsBillDetail(item.kind)
+              ? _billFocusFromNotification(item)
+              : null;
+          final ringPage = _ringPageFor(item.kind);
+          await widget.onOpenBudgetBalance!(
+            focusTarget: focus,
+            billFocus: billFocus,
+            ringPage: ringPage,
+          );
+          if (item.kind == NotificationKind.lowBalanceForBill ||
+              item.kind == NotificationKind.categoryOverBudget) {
+            await center.dismiss(item.id);
+          }
+        } else if (item.module == NotificationModule.missions &&
+            widget.onOpenMissionBoard != null &&
+            (item.kind == NotificationKind.missionRefresh ||
+                item.kind == NotificationKind.missionOverdue)) {
+          final missionId = _missionIdFromNotification(item);
+          final autoDetail = item.kind == NotificationKind.missionOverdue;
+          await widget.onOpenMissionBoard!(
+            missionId: missionId,
+            autoOpenDetail: autoDetail,
+          );
+          await center.dismiss(item.id);
+        } else if (_routesToDaySchedule(item)) {
+          if (widget.onNotificationTap != null) {
+            await widget.onNotificationTap!(item);
+          }
+          await center.dismiss(item.id);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Action: ${action.label}'),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
         break;
       case NotificationActionType.end:
         await context.read<WorkoutProvider>().finishSession();
         await center.dismiss(item.id);
         break;
       case NotificationActionType.pay:
+        if (item.module == NotificationModule.budget &&
+            widget.onOpenBudgetBalance != null &&
+            (item.kind == NotificationKind.billUpcoming ||
+                item.kind == NotificationKind.billOverdue)) {
+          final focus = _budgetFocusTargetFor(item);
+          final billFocus = _billFocusFromNotification(item);
+          await widget.onOpenBudgetBalance!(
+            focusTarget: focus,
+            billFocus: billFocus,
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Action: ${action.label}'),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+        break;
       case NotificationActionType.complete:
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Action: ${action.label}'),
-            duration: const Duration(seconds: 2),
-          ),
-        );
+        if (item.kind == NotificationKind.taskDueToday &&
+            widget.onNotificationTap != null) {
+          await widget.onNotificationTap!(
+            item,
+            autoCompleteTask: true,
+          );
+          await center.dismiss(item.id);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Action: ${action.label}'),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
         break;
       case NotificationActionType.reschedule:
-        await _openRescheduleSheet(action.payload ?? item.payload);
+        await _openReschedulePopup(item, action.payload ?? item.payload);
         break;
       default:
         ScaffoldMessenger.of(context).showSnackBar(
@@ -2562,40 +3227,38 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
                   ),
                   child: FadeTransition(
                     opacity: curved ?? const AlwaysStoppedAnimation(1.0),
-                    child: Hero(
-                      tag: widget.heroTag,
-                      child: Container(
-                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF202A3A),
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(
-                            color: Colors.white.withValues(alpha: .14),
-                          ),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Color(0x66000000),
-                              blurRadius: 18,
-                              offset: Offset(0, 12),
-                            ),
-                          ],
+                    child: Container(
+                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF202A3A),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: .14),
                         ),
-                        child: SizedBox(
-                          height: size.height * 0.78,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                            if (widget.showResetButton) ...[
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Color(0x66000000),
+                            blurRadius: 18,
+                            offset: Offset(0, 12),
+                          ),
+                        ],
+                      ),
+                      child: SizedBox(
+                        height: size.height * 0.78,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (kDebugMode) ...[
                               SizedBox(
                                 width: double.infinity,
                                   child: OutlinedButton(
                                     onPressed: () async {
+                                      final notificationProvider = context.read<NotificationCenterProvider>();
+                                      final scaffoldMessenger = ScaffoldMessenger.of(context);
                                       await widget.onResetAlignment();
-                                      await context
-                                          .read<NotificationCenterProvider>()
-                                          .clearAll();
-                                      if (context.mounted) {
-                                        ScaffoldMessenger.of(context)
+                                      await notificationProvider.clearAll();
+                                      if (mounted) {
+                                        scaffoldMessenger
                                             .showSnackBar(
                                           const SnackBar(
                                             content:
@@ -2615,24 +3278,22 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
                                 ),
                               ),
                               const SizedBox(height: 10),
-                              if (kDebugMode) ...[
-                                SizedBox(
-                                  width: double.infinity,
-                                  child: OutlinedButton(
-                                    onPressed: () => _seedDemoNotifications(),
-                                    style: OutlinedButton.styleFrom(
-                                      side: BorderSide(
-                                        color: Colors.white
-                                            .withValues(alpha: .25),
-                                      ),
-                                    ),
-                                    child: const Text(
-                                      'Seed demo notifications (debug)',
+                              SizedBox(
+                                width: double.infinity,
+                                child: OutlinedButton(
+                                  onPressed: () => _seedDemoNotifications(),
+                                  style: OutlinedButton.styleFrom(
+                                    side: BorderSide(
+                                      color: Colors.white
+                                          .withValues(alpha: .25),
                                     ),
                                   ),
+                                  child: const Text(
+                                    'Seed demo notifications (debug)',
+                                  ),
                                 ),
-                                const SizedBox(height: 10),
-                              ],
+                              ),
+                              const SizedBox(height: 10),
                             ],
                               Row(
                                 crossAxisAlignment: CrossAxisAlignment.center,
@@ -2825,14 +3486,43 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
                                                     .dismiss(item.id);
                                                 return true;
                                               },
-                                              child: _NotificationPill(
-                                                item: item,
-                                                accent:
-                                                    _moduleColor(item.module),
-                                                onActionTap: (action) =>
-                                                    _handleAction(
-                                                  action,
-                                                  item,
+                                              child: Hero(
+                                                tag: _notificationHeroTag(item),
+                                                flightShuttleBuilder: (
+                                                  context,
+                                                  animation,
+                                                  direction,
+                                                  fromCtx,
+                                                  toCtx,
+                                                ) {
+                                                  final Widget target =
+                                                      direction ==
+                                                              HeroFlightDirection
+                                                                  .push
+                                                          ? toCtx.widget
+                                                          : fromCtx.widget;
+                                                  return FadeTransition(
+                                                    opacity: animation.drive(
+                                                      CurveTween(
+                                                        curve: Curves
+                                                            .easeInOutCubic,
+                                                      ),
+                                                    ),
+                                                    child: target,
+                                                  );
+                                                },
+                                                child: _NotificationPill(
+                                                  item: item,
+                                                  accent: _moduleColor(
+                                                    item.module,
+                                                  ),
+                                                  onActionTap: (action) =>
+                                                      _handleAction(
+                                                    action,
+                                                    item,
+                                                  ),
+                                                  onTap:
+                                                      _buildPillTapHandler(item),
                                                 ),
                                               ),
                                             ),
@@ -2858,7 +3548,6 @@ class _NotificationCenterPopupState extends State<_NotificationCenterPopup> {
                           ),
                         ),
                       ),
-                    ),
                   ),
                 ),
               ),
@@ -2875,18 +3564,19 @@ class _NotificationPill extends StatelessWidget {
     required this.item,
     required this.accent,
     required this.onActionTap,
+    this.onTap,
   });
 
   final NotificationItem item;
   final Color accent;
   final ValueChanged<NotificationAction> onActionTap;
+  final VoidCallback? onTap;
 
   Color _severityColor() {
     switch (item.severity) {
       case NotificationSeverity.critical:
         return Colors.redAccent.withValues(alpha: 0.9);
       case NotificationSeverity.nonCritical:
-      default:
         return Colors.white.withValues(alpha: 0.28);
     }
   }
@@ -2896,184 +3586,193 @@ class _NotificationPill extends StatelessWidget {
     final railColor = _severityColor();
     final metaLabel = item.meta ??
         DateFormat.jm().format(item.createdAt); // fallback to timestamp
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: .08),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: railColor.withValues(alpha: 0.4),
-          width: 1,
-        ),
-      ),
-        child: IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Container(
-                width: 6,
-                decoration: BoxDecoration(
-                  color: railColor,
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(8),
-                    bottomLeft: Radius.circular(8),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: .08),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: railColor.withValues(alpha: 0.4),
+              width: 1,
+            ),
+          ),
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  width: 6,
+                  decoration: BoxDecoration(
+                    color: railColor,
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(8),
+                      bottomLeft: Radius.circular(8),
+                    ),
                   ),
                 ),
-              ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 7, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: accent.withValues(alpha: 0.14),
-                                    borderRadius: BorderRadius.circular(7),
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(
-                                        Icons.bolt,
-                                        size: 12,
-                                        color: accent,
-                                      ),
-                                      const SizedBox(width: 2.5),
-                                      Text(
-                                        item.module.name.toUpperCase(),
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 9.8,
-                                          fontWeight: FontWeight.w800,
-                                          letterSpacing: 0.25,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const Spacer(),
-                                if (item.isBundled)
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Row(
+                                children: [
                                   Container(
                                     padding: const EdgeInsets.symmetric(
-                                        horizontal: 6, vertical: 2.5),
+                                        horizontal: 7, vertical: 2),
                                     decoration: BoxDecoration(
-                                      color: Colors.white.withValues(alpha: 0.08),
+                                      color: accent.withValues(alpha: 0.14),
                                       borderRadius: BorderRadius.circular(7),
                                     ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.bolt,
+                                          size: 12,
+                                          color: accent,
+                                        ),
+                                        const SizedBox(width: 2.5),
+                                        Text(
+                                          item.module.name.toUpperCase(),
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 9.8,
+                                            fontWeight: FontWeight.w800,
+                                            letterSpacing: 0.25,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const Spacer(),
+                                  if (item.isBundled)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 6, vertical: 2.5),
+                                      decoration: BoxDecoration(
+                                        color:
+                                            Colors.white.withValues(alpha: 0.08),
+                                        borderRadius: BorderRadius.circular(7),
+                                      ),
+                                      child: Text(
+                                        '${item.bundleCount}x',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 10,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                item.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 12.6,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppPalette.onSurface,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                item.detail,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: AppPalette.onSurface
+                                      .withValues(alpha: .75),
+                                  height: 1.15,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.schedule,
+                                    size: 12,
+                                    color: AppPalette.onSurface
+                                        .withValues(alpha: .54),
+                                  ),
+                                  const SizedBox(width: 3),
+                                  Expanded(
                                     child: Text(
-                                      '${item.bundleCount}x',
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.w700,
+                                      metaLabel,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
                                         fontSize: 10,
+                                        color: AppPalette.onSurface
+                                            .withValues(alpha: .72),
                                       ),
                                     ),
                                   ),
-                              ],
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              item.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 12.6,
-                                fontWeight: FontWeight.w800,
-                                color: AppPalette.onSurface,
+                                ],
                               ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              item.detail,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 11,
-                                color:
-                                    AppPalette.onSurface.withValues(alpha: .75),
-                                height: 1.15,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Row(
-                              children: [
-                                Icon(
-                                  Icons.schedule,
-                                  size: 12,
-                                  color:
-                                      AppPalette.onSurface.withValues(alpha: .54),
-                                ),
-                                const SizedBox(width: 3),
-                                Expanded(
-                                  child: Text(
-                                    metaLabel,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      color: AppPalette.onSurface
-                                          .withValues(alpha: .72),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                      if (item.actions.isNotEmpty) ...[
-                        const SizedBox(width: 8),
-                        Wrap(
-                          spacing: 4,
-                          runSpacing: 4,
-                          direction: Axis.vertical,
-                          alignment: WrapAlignment.center,
-                          children: item.actions
-                              .map(
-                                (action) => OutlinedButton(
-                                  onPressed: () => onActionTap(action),
-                                  style: OutlinedButton.styleFrom(
-                                    minimumSize: const Size(80, 32),
-                                    maximumSize: const Size(100, 34),
-                                    tapTargetSize:
-                                        MaterialTapTargetSize.shrinkWrap,
-                                    foregroundColor: Colors.white,
-                                    side: BorderSide(
-                                      color: Colors.white.withValues(alpha: 0.24),
+                        if (item.actions.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          Wrap(
+                            spacing: 4,
+                            runSpacing: 4,
+                            direction: Axis.vertical,
+                            alignment: WrapAlignment.center,
+                            children: item.actions
+                                .map(
+                                  (action) => OutlinedButton(
+                                    onPressed: () => onActionTap(action),
+                                    style: OutlinedButton.styleFrom(
+                                      minimumSize: const Size(80, 32),
+                                      maximumSize: const Size(100, 34),
+                                      tapTargetSize:
+                                          MaterialTapTargetSize.shrinkWrap,
+                                      foregroundColor: Colors.white,
+                                      side: BorderSide(
+                                        color: Colors.white
+                                            .withValues(alpha: 0.24),
+                                      ),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 4,
+                                      ),
                                     ),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                      vertical: 4,
+                                    child: Text(
+                                      action.label,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 10.5,
+                                      ),
                                     ),
                                   ),
-                                  child: Text(
-                                    action.label,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 10.5,
-                                    ),
-                                  ),
-                                ),
-                              )
-                              .toList(),
-                        ),
+                                )
+                                .toList(),
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
+      ),
     );
   }
 }

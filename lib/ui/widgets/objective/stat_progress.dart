@@ -1,5 +1,6 @@
 // lib/ui/widgets/objective/stat_progress.dart
 import 'package:flutter/material.dart';
+import 'package:kontinuum/data/level_utils.dart';
 
 /// Wrap-aware progress bar that animates smoothly within the current
 /// "level window" and across level boundaries.
@@ -62,37 +63,23 @@ class _LevelProgressBarState extends State<LevelProgressBar>
     super.dispose();
   }
 
-  // xp-per-level (100 equal slices of maxXp; guard zero)
-  double _perLevel() {
-    final mx = widget.maxXp <= 0 ? 1 : widget.maxXp;
-    return mx / 100.0;
-  }
-
   // Progress within the *current* level window (0..1)
   double _progressFor(int xp) {
-    final step = _perLevel();
-    if (step <= 0) return 0.0;
-
-    // Display level 1..100
-    final lvl =
-        ((xp / (widget.maxXp <= 0 ? 1 : widget.maxXp)) * 100).floor().clamp(
-          0,
-          99,
-        ) +
-        1;
-
-    final lower = (lvl - 1) * step;
-    final prog = (xp - lower) / step; // 0..1 within this level
-    final frac = prog.clamp(0.0, 1.0);
+    final lp = _levelData(xp);
+    final frac = lp.progress.clamp(0.0, 1.0);
     if (frac.isNaN || frac.isInfinite) return 0.0;
     return frac;
   }
 
   // 0-based index of the level window you’re in
   int _levelIndex(int xp) {
-    final step = _perLevel();
-    if (step <= 0) return 0;
-    return (xp / step).floor().clamp(0, 99);
+    final lp = _levelData(xp);
+    return (lp.level.clamp(1, LevelUtils.maxLevel) - 1);
+  }
+
+  LevelProgress _levelData(int xp) {
+    final cap = widget.maxXp <= 0 ? 1 : widget.maxXp;
+    return LevelUtils.getProgress(xp: xp, maxXp: cap);
   }
 
   Duration _durForDelta(double delta) {
@@ -116,6 +103,10 @@ class _LevelProgressBarState extends State<LevelProgressBar>
     ).animate(CurvedAnimation(parent: _ctrl, curve: curve));
     _anim = anim;
 
+    setState(() {
+      _visual = from.clamp(0.0, 1.0);
+    });
+
     void tick() {
       setState(() {
         _visual = _anim.value.clamp(0.0, 1.0);
@@ -129,103 +120,77 @@ class _LevelProgressBarState extends State<LevelProgressBar>
 
   Future<void> _animateFromTo(int prevXp, int currXp) async {
     final runId = ++_seq;
-
-    final fromProg = _progressFor(prevXp);
-    final toProg = _progressFor(currXp);
-    final fromLvl = _levelIndex(prevXp);
-    final toLvl = _levelIndex(currXp);
-
-    // No change
-    if (prevXp == currXp) {
-      setState(() => _visual = toProg);
+    final segments = _progressSegments(prevXp, currXp);
+    final target = _progressFor(currXp);
+    if (segments.isEmpty) {
+      setState(() => _visual = target);
       return;
     }
 
     // Helper to bail if a newer sequence starts
-    Future<void> guard(Future<void> f) async {
+    Future<bool> guard(Future<void> f) async {
       await f;
-      if (_seq != runId) {
-        throw 'cancelled';
+      return _seq == runId;
+    }
+
+    for (final segment in segments) {
+      try {
+        final ok = await guard(
+          _animateSegment(
+            from: segment.from,
+            to: segment.to,
+            duration: _durForDelta(segment.to - segment.from),
+          ),
+        );
+        if (!ok) {
+          setState(() => _visual = target);
+          return;
+        }
+      } catch (_) {
+        if (_seq != runId) return;
       }
     }
 
-    try {
-      if (currXp > prevXp) {
-        // FORWARD: fill to 1.0 for each level crossed, then up to toProg
-        final levelsCrossed = toLvl - fromLvl;
-        if (levelsCrossed <= 0) {
-          await guard(
-            _animateSegment(
-              from: fromProg,
-              to: toProg,
-              duration: _durForDelta(toProg - fromProg),
-            ),
-          );
-        } else {
-          await guard(
-            _animateSegment(
-              from: fromProg,
-              to: 1.0,
-              duration: _durForDelta(1.0 - fromProg),
-            ),
-          );
-          for (int i = 0; i < levelsCrossed - 1; i++) {
-            if (_seq != runId) throw 'cancelled';
-            setState(() => _visual = 0.0);
-            await guard(
-              _animateSegment(from: 0.0, to: 1.0, duration: _durForDelta(1.0)),
-            );
-          }
-          if (_seq != runId) throw 'cancelled';
-          setState(() => _visual = 0.0);
-          await guard(
-            _animateSegment(
-              from: 0.0,
-              to: toProg,
-              duration: _durForDelta(toProg),
-            ),
-          );
-        }
-      } else {
-        // BACKWARD: unfill to 0.0 for each level crossed backward, then down to toProg
-        final levelsCrossed = fromLvl - toLvl;
-        if (levelsCrossed <= 0) {
-          await guard(
-            _animateSegment(
-              from: fromProg,
-              to: toProg,
-              duration: _durForDelta(toProg - fromProg),
-            ),
-          );
-        } else {
-          await guard(
-            _animateSegment(
-              from: fromProg,
-              to: 0.0,
-              duration: _durForDelta(fromProg - 0.0),
-            ),
-          );
-          for (int i = 0; i < levelsCrossed - 1; i++) {
-            if (_seq != runId) throw 'cancelled';
-            setState(() => _visual = 1.0);
-            await guard(
-              _animateSegment(from: 1.0, to: 0.0, duration: _durForDelta(1.0)),
-            );
-          }
-          if (_seq != runId) throw 'cancelled';
-          setState(() => _visual = 1.0);
-          await guard(
-            _animateSegment(
-              from: 1.0,
-              to: toProg,
-              duration: _durForDelta(1.0 - toProg),
-            ),
-          );
-        }
-      }
-    } catch (_) {
-      // cancelled by a newer sequence — ignore
+    // Ensure final visual matches the target progress even if animations bailed early.
+    if (_visual != target && _seq == runId) {
+      setState(() => _visual = target);
     }
+  }
+
+  List<_ProgressSegment> _progressSegments(int prevXp, int currXp) {
+    final prevLevel = _levelIndex(prevXp);
+    final currLevel = _levelIndex(currXp);
+    final start = _progressFor(prevXp);
+    final end = _progressFor(currXp);
+    final segments = <_ProgressSegment>[];
+
+    void add(double from, double to) {
+      final a = from.clamp(0.0, 1.0).toDouble();
+      final b = to.clamp(0.0, 1.0).toDouble();
+      if ((a - b).abs() < 0.0001) return;
+      segments.add(_ProgressSegment(a, b));
+    }
+
+    if (currLevel == prevLevel) {
+      add(start, end);
+      return segments;
+    }
+
+    if (currLevel > prevLevel) {
+      add(start, 1.0);
+      for (int level = prevLevel + 1; level < currLevel; level++) {
+        add(0.0, 1.0);
+      }
+      add(0.0, end);
+      return segments;
+    }
+
+    add(start, 0.0);
+    for (int level = prevLevel - 1; level > currLevel; level--) {
+      add(1.0, 0.0);
+    }
+    add(1.0, end);
+    return segments;
   }
 
   @override
@@ -244,22 +209,20 @@ class MiniXpNumbers extends StatelessWidget {
   const MiniXpNumbers({
     super.key,
     required this.level,
-    required this.step,
-    required this.currentWithin,
-    required this.totalMaxXp,
+    required this.xpIntoLevel,
+    required this.levelSpan,
     required this.color,
   });
 
-  final int level; // 1..100
-  final int step; // maxXp/100
-  final int currentWithin; // xp - lowerBound
-  final int totalMaxXp; // total cap (for right side "total")
+  final int level;
+  final int xpIntoLevel; // xp within the current level window
+  final int levelSpan; // xp needed for this level
   final Color color;
 
   @override
   Widget build(BuildContext context) {
-    final left = "$currentWithin / $step XP";
-    final right = "${(level - 1) * step + currentWithin} / $totalMaxXp total";
+    final safeSpan = levelSpan <= 0 ? 1 : levelSpan;
+    final left = "$xpIntoLevel / $safeSpan XP";
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
@@ -267,15 +230,14 @@ class MiniXpNumbers extends StatelessWidget {
           left,
           style: TextStyle(fontSize: 10, color: color.withValues(alpha: 0.85)),
         ),
-        const Text(
-          " ",
-          style: TextStyle(fontSize: 10, color: Colors.transparent),
-        ),
-        Text(
-          right,
-          style: const TextStyle(fontSize: 10, color: Colors.white38),
-        ),
       ],
     );
   }
+}
+
+class _ProgressSegment {
+  final double from;
+  final double to;
+
+  const _ProgressSegment(this.from, this.to);
 }

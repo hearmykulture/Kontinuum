@@ -19,11 +19,15 @@ class StatHistoryEntry extends HiveObject {
   @HiveField(4, defaultValue: 0)
   final int xpDelta;
 
+  @HiveField(5, defaultValue: null)
+  final String? objectiveId;
+
   StatHistoryEntry({
     required this.statId,
     required this.date,
     required this.amount,
     this.skillId,
     this.xpDelta = 0,
+    this.objectiveId,
   });
 }

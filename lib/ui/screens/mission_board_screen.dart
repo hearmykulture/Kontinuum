@@ -7,7 +7,9 @@ import 'package:provider/provider.dart';
 import 'package:kontinuum/models/mission.dart' as model;
 import 'package:kontinuum/providers/mission_provider.dart';
 import 'package:kontinuum/providers/objective_provider.dart';
+import 'package:kontinuum/data/stat_repository.dart';
 import 'package:kontinuum/ui/widgets/mission_card.dart';
+import 'package:kontinuum/ui/widgets/mission_detail_hero_popup.dart';
 import 'package:kontinuum/ui/widgets/level_up_watcher.dart';
 
 // For the Home button fallback when this screen isn't on its own route.
@@ -38,12 +40,16 @@ class MissionBoardScreen extends StatefulWidget {
     super.key,
     this.isActive = true,
     this.skipIntroAnimation = false,
+    this.focusMissionId,
+    this.autoOpenMissionDetail = false,
   });
 
   /// When embedded inside a PageView, pass `isActive: pageIndex == boardIndex`
   /// so the 1s timer is paused off-screen to avoid jank.
   final bool isActive;
   final bool skipIntroAnimation;
+  final String? focusMissionId;
+  final bool autoOpenMissionDetail;
 
   @override
   State<MissionBoardScreen> createState() => _MissionBoardScreenState();
@@ -58,6 +64,7 @@ class _MissionBoardScreenState extends State<MissionBoardScreen>
   Timer? _timer;
   Duration _timeUntilMidnight = Duration.zero;
   bool _didResetThisMidnight = false;
+  String? _pendingMissionId;
 
   // Intro fade (no slide)
   late final AnimationController _introCtrl;
@@ -66,6 +73,7 @@ class _MissionBoardScreenState extends State<MissionBoardScreen>
   @override
   void initState() {
     super.initState();
+    _pendingMissionId = widget.autoOpenMissionDetail ? widget.focusMissionId : null;
 
     // Longer, more dramatic entrance (no slide).
     _introCtrl = AnimationController(
@@ -96,6 +104,7 @@ class _MissionBoardScreenState extends State<MissionBoardScreen>
 
       // Start/stop ticking based on visibility.
       _ensureTimer(widget.isActive, initialKick: true);
+      _maybeOpenFocusedMission();
     });
   }
 
@@ -104,6 +113,12 @@ class _MissionBoardScreenState extends State<MissionBoardScreen>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.isActive != widget.isActive) {
       _ensureTimer(widget.isActive);
+    }
+    if (widget.autoOpenMissionDetail &&
+        widget.focusMissionId != oldWidget.focusMissionId &&
+        widget.focusMissionId != null) {
+      _pendingMissionId = widget.focusMissionId;
+      _maybeOpenFocusedMission();
     }
   }
 
@@ -145,6 +160,8 @@ class _MissionBoardScreenState extends State<MissionBoardScreen>
     } else if (_didResetThisMidnight && _timeUntilMidnight.inSeconds >= 86390) {
       _didResetThisMidnight = false;
     }
+
+    _maybeOpenFocusedMission();
   }
 
   void _updateTimeUntilMidnight() {
@@ -198,6 +215,61 @@ class _MissionBoardScreenState extends State<MissionBoardScreen>
         (route) => false,
       );
     }
+  }
+
+  void _maybeOpenFocusedMission() {
+    if (!widget.autoOpenMissionDetail) return;
+    final id = _pendingMissionId;
+    if (id == null) return;
+    final mission = _findMissionById(id);
+    if (mission == null) {
+      _pendingMissionId = null;
+      _showMissionSnack('Mission not found');
+      return;
+    }
+    _pendingMissionId = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _openMissionDetail(mission);
+    });
+  }
+
+  model.Mission? _findMissionById(String id) {
+    final missions = context.read<MissionProvider>().allMissionsSorted;
+    try {
+      return missions.firstWhere((m) => m.id == id);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _openMissionDetail(model.Mission mission) async {
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      PageRouteBuilder<void>(
+        opaque: false,
+        barrierColor: Colors.transparent,
+        transitionDuration: const Duration(milliseconds: 260),
+        reverseTransitionDuration: const Duration(milliseconds: 220),
+        pageBuilder: (_, __, ___) => MissionDetailHeroPopup(mission: mission),
+        transitionsBuilder: (_, animation, __, child) {
+          return FadeTransition(
+            opacity: CurvedAnimation(
+              parent: animation,
+              curve: Curves.easeOutCubic,
+              reverseCurve: Curves.easeInCubic,
+            ),
+            child: child,
+          );
+        },
+      ),
+    );
+  }
+
+  void _showMissionSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   @override
@@ -438,6 +510,102 @@ class _BoardPage extends StatelessWidget {
 class MissionBankScreen extends StatelessWidget {
   const MissionBankScreen({super.key});
 
+  Future<void> _openMissionEditor(BuildContext context) async {
+    final res = await Navigator.of(context).push<editor.MissionEditorResult>(
+      MaterialPageRoute<editor.MissionEditorResult>(
+        fullscreenDialog: true,
+        builder: (_) => const editor.MissionEditorPage(),
+      ),
+    );
+
+    if (res == null || !context.mounted) return;
+
+    final categoryId = _resolveCategoryId(res);
+    if (categoryId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Pick a category to save this mission.')),
+      );
+      return;
+    }
+
+    final missionProvider = context.read<MissionProvider>();
+    final objectiveProvider = context.read<ObjectiveProvider>();
+
+    final mission = _buildMissionFromResult(
+      res,
+      missionProvider: missionProvider,
+      categoryId: categoryId,
+    );
+
+    objectiveProvider.ensureCategoryExists(categoryId);
+    missionProvider.addMission(mission);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Added "${mission.title}"')),
+    );
+  }
+
+  String? _resolveCategoryId(editor.MissionEditorResult res) {
+    String? id = res.categoryId?.trim();
+    if ((id == null || id.isEmpty) && res.stats.isNotEmpty) {
+      id = StatRepository.getCategoryForStat(res.stats.first.id);
+    }
+    if (id == null || id.trim().isEmpty) return null;
+    return id.trim().toUpperCase();
+  }
+
+  model.Mission _buildMissionFromResult(
+    editor.MissionEditorResult res, {
+    required MissionProvider missionProvider,
+    required String categoryId,
+  }) {
+    final title = res.title.trim().isEmpty ? 'Mission' : res.title.trim();
+    final id = _generateMissionId(title, missionProvider);
+    final statIds =
+        res.stats.map((p) => p.id).toSet().toList(growable: false);
+    final desc = res.description?.trim();
+    final xp = res.xpReward <= 0 ? 1 : res.xpReward;
+
+    return model.Mission(
+      id: id,
+      title: title,
+      description: (desc == null || desc.isEmpty) ? null : desc,
+      categoryIds: [categoryId],
+      statIds: statIds,
+      xpReward: xp,
+      rarity: res.rarity,
+      isAccepted: false,
+      isCompleted: false,
+    );
+  }
+
+  String _generateMissionId(String title, MissionProvider provider) {
+    final base = _slugify(title);
+    var candidate = base;
+    var suffix = 2;
+
+    bool exists(String id) {
+      final lower = id.toLowerCase();
+      return provider.allMissionsSorted.any(
+        (m) => m.id.toLowerCase() == lower,
+      );
+    }
+
+    while (exists(candidate)) {
+      candidate = '${base}_$suffix';
+      suffix++;
+    }
+
+    return candidate;
+  }
+
+  String _slugify(String input) {
+    final slug = input.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_');
+    final squashed = slug.replaceAll(RegExp(r'_+'), '_');
+    final trimmed = squashed.replaceAll(RegExp(r'^_+|_+$'), '');
+    return trimmed.isEmpty ? 'mission' : trimmed;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -478,9 +646,9 @@ class MissionBankScreen extends StatelessWidget {
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.all(8),
                 ),
-                tooltip: 'Close',
-                icon: const Icon(Icons.close),
-                onPressed: () => Navigator.of(context).pop(),
+                tooltip: 'Add mission',
+                icon: const Icon(Icons.add),
+                onPressed: () => _openMissionEditor(context),
               ),
             ),
           ),

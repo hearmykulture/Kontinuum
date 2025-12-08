@@ -3,6 +3,8 @@
 import 'package:flutter/material.dart';
 import 'package:hive/hive.dart';
 import 'package:kontinuum/core/time/app_clock.dart';
+import 'package:kontinuum/ui/screens/budget/models/budget_models.dart'
+    show BudgetTimeSpan;
 
 part 'budget_models_hive.g.dart';
 
@@ -16,9 +18,11 @@ class BudgetHive extends HiveObject {
     required this.categories,
     required this.recurrings,
     required this.unallocatedAsSavings,
+    int? cadenceIndex,
     DateTime? createdAt,
     DateTime? updatedAt,
-  })  : createdAt = createdAt ?? AppClock.now(),
+  })  : cadenceIndex = cadenceIndex ?? BudgetTimeSpan.monthly.index,
+        createdAt = createdAt ?? AppClock.now(),
         updatedAt = updatedAt ?? AppClock.now();
 
   @HiveField(0)
@@ -45,6 +49,9 @@ class BudgetHive extends HiveObject {
   @HiveField(7)
   DateTime updatedAt;
 
+  @HiveField(8)
+  int cadenceIndex;
+
   BudgetHive copyWith({
     String? title,
     int? monthlyAmount,
@@ -53,6 +60,7 @@ class BudgetHive extends HiveObject {
     bool? unallocatedAsSavings,
     DateTime? createdAt,
     DateTime? updatedAt,
+    int? cadenceIndex,
   }) {
     return BudgetHive(
       id: id,
@@ -64,6 +72,7 @@ class BudgetHive extends HiveObject {
       unallocatedAsSavings: unallocatedAsSavings ?? this.unallocatedAsSavings,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? AppClock.now(),
+      cadenceIndex: cadenceIndex ?? this.cadenceIndex,
     );
   }
 }

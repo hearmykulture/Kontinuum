@@ -90,7 +90,7 @@ class _StopwatchSheetState extends State<StopwatchSheet> {
     final rawMinutes = (_elapsedSec / 60).ceil();
     final minutes = _elapsedSec > 0 ? (rawMinutes == 0 ? 1 : rawMinutes) : 0;
 
-    return Padding(
+    return SingleChildScrollView(
       padding: EdgeInsets.only(
         left: 16,
         right: 16,

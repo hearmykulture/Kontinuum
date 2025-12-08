@@ -121,7 +121,7 @@ class LevelUtils {
 
   static int getSkillCap(double weight) {
     if (!weight.isFinite || weight <= 0) return 0;
-    return categoryMaxXp * weight.round();
+    return (categoryMaxXp * weight).round();
   }
 
   static int getStatCap(double skillWeight, double statWeight) {

@@ -11,12 +11,14 @@ import 'package:kontinuum/data/stat_repository.dart';
 import 'package:kontinuum/providers/objective_provider.dart';
 import 'package:kontinuum/ui/widgets/objective/objective_tokens.dart';
 import 'package:kontinuum/data/level_utils.dart';
+import 'package:kontinuum/core/time/app_clock.dart';
 
 // same widgets the cards use
 import 'package:kontinuum/ui/widgets/objective/complete_button.dart';
 import 'package:kontinuum/ui/widgets/objective/tally_stepper.dart';
 import 'package:kontinuum/ui/widgets/objective/stopwatch_sheet.dart';
 import 'package:kontinuum/ui/widgets/xp_gain_bottom_bar.dart' as xpoverlay;
+import 'package:kontinuum/ui/widgets/objective/stat_progress.dart';
 
 // abstinence mini sheet
 import 'package:kontinuum/ui/widgets/objective/abstinence_sheet.dart';
@@ -715,8 +717,6 @@ class _ObjectiveInsightsSectionState extends State<_ObjectiveInsightsSection> {
 
     return Consumer<ObjectiveProvider>(
       builder: (context, provider, _) {
-        final consistencyPoints = _buildConsistencyPoints(provider, objective);
-
         final primaryCategoryId = objective.categoryIds.isNotEmpty
             ? objective.categoryIds.first
             : null;
@@ -732,11 +732,21 @@ class _ObjectiveInsightsSectionState extends State<_ObjectiveInsightsSection> {
             _buildSkillItems(provider, skills, accentColor: accentColor);
 
         final trackedDays = _objectiveTrackedDays(provider, objective);
+        final consistencyPoints =
+            _buildConsistencyPoints(provider, objective, trackedDays);
 
-        final skillHistorySeries =
-            _buildSkillHistorySeries(provider, skills, trackedDays);
-        final statHistorySeries =
-            _buildStatHistorySeries(provider, objective, trackedDays);
+        final skillHistorySeries = _buildSkillHistorySeries(
+          provider,
+          skills,
+          trackedDays,
+          objectiveId: objective.id,
+        );
+        final statHistorySeries = _buildStatHistorySeries(
+          provider,
+          objective,
+          trackedDays,
+          objectiveId: objective.id,
+        );
         final streak = _currentStreak(objective.id);
 
         final consistencyHistory = consistencyPoints
@@ -1075,24 +1085,18 @@ class _ConsistencyPoint {
 List<_ConsistencyPoint> _buildConsistencyPoints(
   ObjectiveProvider provider,
   Objective objective,
+  List<DateTime> trackedDays,
 ) {
-  final dates = provider.getAllTrackedDates().toList()
-    ..sort((a, b) => a.compareTo(b));
-
-  if (dates.isEmpty) return const [];
+  if (trackedDays.isEmpty) return const [];
 
   final points = <_ConsistencyPoint>[];
 
-  for (final day in dates) {
+  for (final day in trackedDays) {
     final listForDay = provider.getObjectivesForDay(day);
     final idx = listForDay.indexWhere((o) => o.id == objective.id);
     if (idx == -1) continue;
 
     final instance = listForDay[idx];
-
-    if (!instance.isAbstinence && !instance.isActiveOnDate(day)) {
-      continue;
-    }
 
     final ratio = instance.completionRatioForDate(day);
     points.add(
@@ -1116,27 +1120,52 @@ List<DateTime> _objectiveTrackedDays(
   ObjectiveProvider provider,
   Objective objective,
 ) {
-  final dates = provider.getAllTrackedDates().toList()
-    ..sort((a, b) => a.compareTo(b));
-
-  if (dates.isEmpty) return const [];
-
+  final today = DateKeys.dateOnly(AppClock.now());
+  final defaultStart = today.subtract(const Duration(days: 29));
+  final earliestRecorded = _earliestObjectiveEntryDate(provider, objective);
+  DateTime start = defaultStart;
+  if (earliestRecorded != null) {
+    if (earliestRecorded.isAfter(today)) {
+      start = today;
+    } else if (earliestRecorded.isAfter(defaultStart)) {
+      start = earliestRecorded;
+    }
+  }
   final tracked = <DateTime>[];
 
-  for (final day in dates) {
-    final listForDay = provider.getObjectivesForDay(day);
+  DateTime cursor = start;
+  while (!cursor.isAfter(today)) {
+    final listForDay = provider.getObjectivesForDay(cursor);
     final idx = listForDay.indexWhere((o) => o.id == objective.id);
-    if (idx == -1) continue;
-
-    final instance = listForDay[idx];
-    if (!instance.isAbstinence && !instance.isActiveOnDate(day)) {
-      continue;
+    if (idx != -1) {
+      final instance = listForDay[idx];
+      if (instance.isAbstinence || instance.isActiveOnDate(cursor)) {
+        tracked.add(cursor);
+      }
+    } else {
+      if (objective.isAbstinence || objective.isActiveOnDate(cursor)) {
+        tracked.add(cursor);
+      }
     }
-
-    tracked.add(day);
+    cursor = cursor.add(const Duration(days: 1));
   }
 
   return tracked;
+}
+
+DateTime? _earliestObjectiveEntryDate(
+  ObjectiveProvider provider,
+  Objective objective,
+) {
+  final dates = provider.getAllTrackedDates().toList()
+    ..sort((a, b) => a.compareTo(b));
+  for (final day in dates) {
+    final list = provider.getObjectivesForDay(day);
+    if (list.any((o) => o.id == objective.id)) {
+      return day;
+    }
+  }
+  return null;
 }
 
 List<Skill> _buildSkillList(
@@ -1257,7 +1286,7 @@ _LevelItem _makeLevelItem({
   final cappedXp = xp <= 0
       ? 0
       : (xp >= safeMax ? safeMax : xp);
-  final cappedLevel = level.clamp(1, 100);
+  final cappedLevel = level.clamp(1, LevelUtils.maxLevel);
 
   var startOfLevel = LevelUtils.getXpForLevel(cappedLevel, safeMax);
   startOfLevel = startOfLevel.clamp(0, safeMax);
@@ -1314,8 +1343,9 @@ class _LevelHistoryPoint {
 _HistorySeries _buildSkillHistorySeries(
   ObjectiveProvider provider,
   List<Skill> skills,
-  List<DateTime> trackedDays,
-) {
+  List<DateTime> trackedDays, {
+  required String objectiveId,
+}) {
   if (skills.isEmpty || provider.statHistory.isEmpty) {
     return const _HistorySeries(points: [], minValue: 0, maxValue: 0);
   }
@@ -1340,6 +1370,7 @@ _HistorySeries _buildSkillHistorySeries(
       if (skillId == null) return false;
       return skillIds.contains(skillId);
     },
+    objectiveId: objectiveId,
     totalMaxXp: totalMaxXp,
     trackedDays: trackedDays,
   );
@@ -1357,8 +1388,9 @@ _HistorySeries _buildSkillHistorySeries(
 _HistorySeries _buildStatHistorySeries(
   ObjectiveProvider provider,
   Objective objective,
-  List<DateTime> trackedDays,
-) {
+  List<DateTime> trackedDays, {
+  required String objectiveId,
+}) {
   if (objective.statIds.isEmpty || provider.statHistory.isEmpty) {
     return const _HistorySeries(points: [], minValue: 0, maxValue: 0);
   }
@@ -1391,6 +1423,7 @@ _HistorySeries _buildStatHistorySeries(
       if (statId == null) return false;
       return statIds.contains(statId);
     },
+    objectiveId: objectiveId,
     totalMaxXp: totalMaxXp,
     trackedDays: trackedDays,
   );
@@ -1410,6 +1443,7 @@ typedef _HistoryPredicate = bool Function(_StatHistoryProxy entry);
 List<_LevelHistoryPoint> _buildHistoryPoints(
   ObjectiveProvider provider, {
   required _HistoryPredicate statPredicate,
+  required String objectiveId,
   required double totalMaxXp,
   required List<DateTime> trackedDays,
 }) {
@@ -1429,6 +1463,10 @@ List<_LevelHistoryPoint> _buildHistoryPoints(
   for (final raw in history) {
     final entry = _StatHistoryProxy(raw);
     if (!statPredicate(entry)) continue;
+    final entryObjectiveId = entry.objectiveId;
+    if (entryObjectiveId != null && entryObjectiveId != objectiveId) {
+      continue;
+    }
 
     final DateTime? date = entry.date;
     if (date == null) continue;
@@ -1495,6 +1533,8 @@ class _StatHistoryProxy {
     if (xp != null && xp != 0) return xp;
     return raw.amount as int? ?? 0;
   }
+
+  String? get objectiveId => raw.objectiveId as String?;
 }
 
 ObjectiveStreak? _currentStreak(String objectiveId) {
@@ -1576,13 +1616,18 @@ class _ObjectiveTrendChart extends StatelessWidget {
           width: 1,
         ),
       ),
-      child: LineChart(
-        LineChartData(
-          minY: 0,
-          maxY: showAsRatio ? 1 : chartMax,
-          lineTouchData: LineTouchData(
-            enabled: true,
-            touchTooltipData: LineTouchTooltipData(
+      child: InteractiveViewer(
+        minScale: 1,
+        maxScale: 4,
+        boundaryMargin: const EdgeInsets.all(60),
+        constrained: true,
+        child: LineChart(
+          LineChartData(
+            minY: 0,
+            maxY: showAsRatio ? 1 : chartMax,
+            lineTouchData: LineTouchData(
+              enabled: true,
+              touchTooltipData: LineTouchTooltipData(
               tooltipBgColor: Colors.black.withValues(alpha: 0.8),
               getTooltipItems: (touchedSpots) {
                 return touchedSpots
@@ -1716,41 +1761,42 @@ class _ObjectiveTrendChart extends StatelessWidget {
               ),
             ),
           ),
-          lineBarsData: [
-            LineChartBarData(
-              spots: spots,
-              isCurved: true,
-              barWidth: 2,
-              color: accentColor,
-              dotData: FlDotData(
-                show: highlightLevelUps,
-                checkToShowDot: (spot, _) {
-                  if (!highlightLevelUps) return false;
-                  final idx = spot.x.round();
-                  if (idx < 0 || idx >= points.length) return false;
-                  return points[idx].leveledUp;
-                },
-                getDotPainter: (spot, percent, bar, index) =>
-                    FlDotCirclePainter(
-                  radius: 3.5,
-                  color: Colors.white,
-                  strokeWidth: 1.5,
-                  strokeColor: accentColor,
+            lineBarsData: [
+              LineChartBarData(
+                spots: spots,
+                isCurved: true,
+                barWidth: 2,
+                color: accentColor,
+                dotData: FlDotData(
+                  show: highlightLevelUps,
+                  checkToShowDot: (spot, _) {
+                    if (!highlightLevelUps) return false;
+                    final idx = spot.x.round();
+                    if (idx < 0 || idx >= points.length) return false;
+                    return points[idx].leveledUp;
+                  },
+                  getDotPainter: (spot, percent, bar, index) =>
+                      FlDotCirclePainter(
+                    radius: 3.5,
+                    color: Colors.white,
+                    strokeWidth: 1.5,
+                    strokeColor: accentColor,
+                  ),
+                ),
+                belowBarData: BarAreaData(
+                  show: true,
+                  gradient: LinearGradient(
+                    colors: [
+                      accentColor.withValues(alpha: 0.25),
+                      accentColor.withValues(alpha: 0.02),
+                    ],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
                 ),
               ),
-              belowBarData: BarAreaData(
-                show: true,
-                gradient: LinearGradient(
-                  colors: [
-                    accentColor.withValues(alpha: 0.25),
-                    accentColor.withValues(alpha: 0.02),
-                  ],
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                ),
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -1786,7 +1832,7 @@ double _resolveGridInterval(double maxValue) {
 /// LEVEL BARS (stats / skills)
 /// ---------------------------------------------------------------------------
 
-class _ObjectiveLevelSection extends StatelessWidget {
+class _ObjectiveLevelSection extends StatefulWidget {
   final List<_LevelItem> items;
 
   const _ObjectiveLevelSection({
@@ -1794,100 +1840,192 @@ class _ObjectiveLevelSection extends StatelessWidget {
   });
 
   @override
+  State<_ObjectiveLevelSection> createState() => _ObjectiveLevelSectionState();
+}
+
+class _ObjectiveLevelSectionState extends State<_ObjectiveLevelSection> {
+  Map<String, int> _prevXpByKey = {};
+
+  String _keyFor(_LevelItem item) => '${item.label}_${item.maxXp}';
+
+  int _safeMax(int maxXp) => maxXp <= 0 ? 1 : maxXp;
+
+  @override
   Widget build(BuildContext context) {
+    final items = widget.items;
     if (items.isEmpty) {
       return const SizedBox.shrink();
     }
 
-    return Column(
-      children: [
-        for (final item in items) ...[
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        '${item.label} • Lv ${item.level}',
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                    Text(
-                      '${item.xp} XP',
-                      style: const TextStyle(
-                        color: Colors.white60,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(999),
-                  child: Container(
-                    height: 6,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.06),
-                    ),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: FractionallySizedBox(
-                        widthFactor: item.isAtCap
-                            ? 1.0
-                            : (item.levelSpan <= 0
-                                    ? 0.0
-                                    : item.currentWithin / item.levelSpan)
-                                .clamp(0.0, 1.0)
-                                .toDouble(),
-                        child: Container(
-                          height: 6,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [
-                                item.color.withValues(alpha: 0.9),
-                                item.color.withValues(alpha: 0.4),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
+    final previousSnapshot = _prevXpByKey;
+    final nextSnapshot = <String, int>{};
+
+    final children = <Widget>[];
+
+    for (final item in items) {
+      final key = _keyFor(item);
+      nextSnapshot[key] = item.xp;
+      final safeMax = _safeMax(item.maxXp);
+      final prevRaw = previousSnapshot[key] ?? item.xp;
+      final prevXp = prevRaw < 0
+          ? 0
+          : (prevRaw > safeMax ? safeMax : prevRaw);
+      final currRaw = item.xp;
+      final currXp = currRaw < 0
+          ? 0
+          : (currRaw > safeMax ? safeMax : currRaw);
+
+      children.add(
+        _LevelBarRow(
+          item: item,
+          previousXp: prevXp,
+          currentXp: currXp,
+          maxXp: safeMax,
+        ),
+      );
+    }
+
+    final column = Column(children: children);
+    _updateSnapshot(nextSnapshot);
+    return column;
+  }
+
+  void _updateSnapshot(Map<String, int> nextSnapshot) {
+    // We don't need setState here; the new snapshot is used on the next build.
+    _prevXpByKey = nextSnapshot;
+  }
+}
+
+class _LevelBarRow extends StatelessWidget {
+  final _LevelItem item;
+  final int previousXp;
+  final int currentXp;
+  final int maxXp;
+
+  const _LevelBarRow({
+    required this.item,
+    required this.previousXp,
+    required this.currentXp,
+    required this.maxXp,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${item.label} • Lv ${item.level}',
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
-                const SizedBox(height: 4),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      item.isAtCap
-                          ? 'Max level reached'
-                          : '${item.xpToNext} XP to next level',
-                      style: const TextStyle(
-                        color: Colors.white60,
-                        fontSize: 10,
-                      ),
-                    ),
-                    Text(
-                      '${item.xp}/${item.maxXp} XP total',
-                      style: const TextStyle(
-                        color: Colors.white38,
-                        fontSize: 10,
-                      ),
-                    ),
-                  ],
+              ),
+              Text(
+                '${item.xp} XP',
+                style: const TextStyle(
+                  color: Colors.white60,
+                  fontSize: 11,
                 ),
-              ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LevelProgressBar(
+              previousXp: previousXp,
+              currentXp: currentXp,
+              maxXp: maxXp,
+              color: item.color,
+              backgroundColor: Colors.white.withValues(alpha: 0.06),
+              thickness: 6,
             ),
           ),
+          const SizedBox(height: 4),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                item.isAtCap
+                    ? 'Max level reached'
+                    : '${item.xpToNext} XP to next level',
+                style: const TextStyle(
+                  color: Colors.white60,
+                  fontSize: 10,
+                ),
+              ),
+              Text(
+                '${item.xp}/${item.maxXp} XP total',
+                style: const TextStyle(
+                  color: Colors.white38,
+                  fontSize: 10,
+                ),
+              ),
+            ],
+          ),
         ],
-      ],
+      ),
+    );
+  }
+}
+
+class _GreyOutTransition extends StatelessWidget {
+  final bool enabled;
+  final Widget child;
+  static const Duration _kDuration = Duration(milliseconds: 220);
+
+  const _GreyOutTransition({
+    required this.enabled,
+    required this.child,
+  });
+
+  static const List<double> _identityMatrix = <double>[
+    1, 0, 0, 0, 0,
+    0, 1, 0, 0, 0,
+    0, 0, 1, 0, 0,
+    0, 0, 0, 1, 0,
+    0, 0, 0, 0, 1,
+  ];
+
+  static const List<double> _greyMatrix = <double>[
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0, 0, 0, 1, 0,
+    0, 0, 0, 0, 1,
+  ];
+
+  List<double> _matrixFor(double t) {
+    return List<double>.generate(
+      20,
+      (i) => _identityMatrix[i] * (1 - t) + _greyMatrix[i] * t,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 0, end: enabled ? 1 : 0),
+      duration: _kDuration,
+      builder: (context, value, child) {
+        final opacity = ui.lerpDouble(1.0, 0.45, value) ?? 1.0;
+        return ColorFiltered(
+          colorFilter: ColorFilter.matrix(_matrixFor(value)),
+          child: Opacity(
+            opacity: opacity,
+            child: child,
+          ),
+        );
+      },
+      child: child,
     );
   }
 }
@@ -1989,35 +2127,59 @@ class _ActionSection extends StatelessWidget {
     }
 
     if (isTally) {
-      return Selector<ObjectiveProvider, int>(
+      return Selector<ObjectiveProvider, ({int amount, bool isCompleted})>(
         selector: (_, p) {
           final list = p.getObjectivesForDay(selectedDate);
           final idx = list.indexWhere((o) => o.id == live.id);
-          if (idx == -1) return 0;
-          return list[idx].getCompletedAmount(selectedDate);
+          if (idx == -1) {
+            return (
+              amount: live.getCompletedAmount(selectedDate),
+              isCompleted: live.isCompleted,
+            );
+          }
+          final obj = list[idx];
+          return (
+            amount: obj.getCompletedAmount(selectedDate),
+            isCompleted: obj.isCompleted,
+          );
         },
-        builder: (context, amount, __) {
-          return TallyStepper(
-            amount: amount,
-            min: 0,
-            max: 1 << 31,
-            target: live.targetAmount,
-            rowHeight: ObjectiveTokens.kRowHeight,
-            numberFontSize: ObjectiveTokens.kStepperNumber,
-            radius: 18,
-            onChanged: (next) {
-              final p = context.read<ObjectiveProvider>();
-              p.updateObjectiveAmountForDate(selectedDate, live.id, next);
+        builder: (context, state, __) {
+          final amount = state.amount;
+          final isCompleted = state.isCompleted;
+          return Align(
+            alignment: Alignment.center,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 280),
+              child: AbsorbPointer(
+                absorbing: isCompleted,
+                child: _GreyOutTransition(
+                  enabled: isCompleted,
+                  child: TallyStepper(
+                    amount: amount,
+                    min: 0,
+                    max: 1 << 31,
+                    target: live.targetAmount,
+                    rowHeight: ObjectiveTokens.kRowHeight,
+                    numberFontSize: ObjectiveTokens.kStepperNumber,
+                    radius: 18,
+                    expandToWidth: true,
+                    onChanged: (next) {
+                      final p = context.read<ObjectiveProvider>();
+                      p.updateObjectiveAmountForDate(selectedDate, live.id, next);
 
-              final list = p.getObjectivesForDay(selectedDate);
-              final idx = list.indexWhere((o) => o.id == live.id);
-              final nowCompleted = (idx != -1) &&
-                  (next >= live.targetAmount) &&
-                  !list[idx].isCompleted;
-              if (nowCompleted) {
-                toggleComplete();
-              }
-            },
+                      final list = p.getObjectivesForDay(selectedDate);
+                      final idx = list.indexWhere((o) => o.id == live.id);
+                      final nowCompleted = (idx != -1) &&
+                          (next >= live.targetAmount) &&
+                          !list[idx].isCompleted;
+                      if (nowCompleted) {
+                        toggleComplete();
+                      }
+                    },
+                  ),
+                ),
+              ),
+            ),
           );
         },
       );

@@ -31,6 +31,18 @@ class Stat extends HiveObject {
   @HiveField(7, defaultValue: 0.0)
   double parentSkillWeight;
 
+  /// Canonical category this stat belongs to (e.g. PRODUCTION).
+  @HiveField(8, defaultValue: null)
+  String? categoryId;
+
+  /// Optional emoji displayed in stat chips.
+  @HiveField(9, defaultValue: null)
+  String? emoji;
+
+  /// Optional description supplied by the user.
+  @HiveField(10, defaultValue: null)
+  String? description;
+
   Stat({
     required this.id,
     required this.label,
@@ -40,11 +52,19 @@ class Stat extends HiveObject {
     required this.repsForMastery,
     this.weight = 0.0,
     this.parentSkillWeight = 0.0,
+    this.categoryId,
+    this.emoji,
+    this.description,
   });
 
   /// Max XP needed to master this stat (weighted share of its skill cap).
   int get maxXp {
-    final cap = LevelUtils.getStatCap(parentSkillWeight, weight);
+    // Legacy stats can have missing weights; default them to 1.0 so they scale
+    // with the parent skill cap instead of falling back to per-minute curves.
+    final double skillW = (parentSkillWeight > 0) ? parentSkillWeight : 1.0;
+    final double statW = (weight > 0) ? weight : 1.0;
+
+    final cap = LevelUtils.getStatCap(skillW, statW);
     if (cap > 0) return cap;
     // Fallback to legacy per-unit curve if weights are missing
     final legacy = averageMinutesPerUnit * repsForMastery;

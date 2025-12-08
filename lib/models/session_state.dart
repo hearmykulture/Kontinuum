@@ -111,6 +111,11 @@ class WorkoutSessionState extends HiveObject {
   @HiveField(16)
   String? scheduledDateIso;
 
+  /// Full per-exercise set history for the session
+  /// Map key = "blockIndex:exerciseIndex" to keep it stable across edits.
+  @HiveField(17)
+  Map<String, List<SavedSetData>> exerciseSets;
+
   WorkoutSessionState({
     required this.workoutId,
     this.routineId,
@@ -129,9 +134,11 @@ class WorkoutSessionState extends HiveObject {
     bool? finalRestStarted,
     bool? finalRestDone,
     this.scheduledDateIso,
+    Map<String, List<SavedSetData>>? exerciseSets,
   })  : completedSetsList = completedSetsList ?? [],
         finalRestStarted = finalRestStarted ?? false,
-        finalRestDone = finalRestDone ?? false;
+        finalRestDone = finalRestDone ?? false,
+        exerciseSets = exerciseSets ?? <String, List<SavedSetData>>{};
 
   /// Helper to get completed sets for a specific exercise
   int getCompletedSets(int blockIndex, int exerciseIndex) {
@@ -201,6 +208,20 @@ class WorkoutSessionState extends HiveObject {
       finalRestStarted: finalRestStarted,
       finalRestDone: finalRestDone,
       scheduledDateIso: scheduledDateIso,
+      exerciseSets: {
+        for (final entry in exerciseSets.entries)
+          entry.key: entry.value
+              .map(
+                (s) => SavedSetData(
+                  index: s.index,
+                  loadLb: s.loadLb,
+                  reps: s.reps,
+                  timestampIso: s.timestampIso,
+                  elapsedSeconds: s.elapsedSeconds,
+                ),
+              )
+              .toList(),
+      },
     );
   }
 }

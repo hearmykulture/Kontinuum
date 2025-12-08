@@ -5,10 +5,15 @@ class CornerIcons extends StatelessWidget {
   const CornerIcons({
     super.key,
     this.top = 0,
+    this.horizontalInset = 0,
     this.leftIcon,
     this.onLeftPressed,
+    this.leftIconSize,
+    this.leftIconColor,
     this.rightIcon,
     this.onRightPressed,
+    this.rightIconSize,
+    this.rightIconColor,
     this.leftTooltip = 'Delete',
     this.rightTooltip = 'Close',
   });
@@ -16,17 +21,32 @@ class CornerIcons extends StatelessWidget {
   /// Distance from the top (can be negative)
   final double top;
 
+  /// Adjust how far the row stretches horizontally (negative = wider).
+  final double horizontalInset;
+
   /// Icon data for the left button
   final IconData? leftIcon;
 
   /// Callback for left button press
   final VoidCallback? onLeftPressed;
 
+  /// Optional left icon size override
+  final double? leftIconSize;
+
+  /// Optional left icon color override
+  final Color? leftIconColor;
+
   /// Icon data for the right button
   final IconData? rightIcon;
 
   /// Callback for right button press
   final VoidCallback? onRightPressed;
+
+  /// Optional right icon size override
+  final double? rightIconSize;
+
+  /// Optional right icon color override
+  final Color? rightIconColor;
 
   /// Tooltip for left button
   final String leftTooltip;
@@ -38,8 +58,8 @@ class CornerIcons extends StatelessWidget {
   Widget build(BuildContext context) {
     return Positioned(
       top: top,
-      left: 0,
-      right: 0,
+      left: horizontalInset,
+      right: horizontalInset,
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
@@ -50,9 +70,11 @@ class CornerIcons extends StatelessWidget {
               child: IconButton(
                 tooltip: leftTooltip,
                 style: IconButton.styleFrom(
-                  foregroundColor: const Color(0xFFFF3B30),
+                  foregroundColor:
+                      leftIconColor ?? const Color(0xFFFF3B30),
+                  padding: const EdgeInsets.all(8),
                 ),
-                icon: Icon(leftIcon, size: 22),
+                icon: Icon(leftIcon, size: leftIconSize ?? 22),
                 onPressed: onLeftPressed,
               ),
             )
@@ -65,10 +87,10 @@ class CornerIcons extends StatelessWidget {
               child: IconButton(
                 tooltip: rightTooltip,
                 style: IconButton.styleFrom(
-                  foregroundColor: Colors.white,
+                  foregroundColor: rightIconColor ?? Colors.white,
                   padding: const EdgeInsets.all(8),
                 ),
-                icon: Icon(rightIcon, size: 20),
+                icon: Icon(rightIcon, size: rightIconSize ?? 20),
                 onPressed: onRightPressed,
               ),
             )

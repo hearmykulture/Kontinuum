@@ -1,9 +1,48 @@
+import 'package:hive/hive.dart';
 import 'package:kontinuum/models/budget_transaction.dart';
 import 'package:kontinuum/models/manual_transaction_draft.dart';
 import 'package:kontinuum/services/budget_boxes.dart';
 import 'package:kontinuum/services/category_map.dart';
 
 class TransactionsStore {
+  static const String _removedTxMetaKey = 'cashflowRemovedTxIds';
+
+  static Set<String> removedTransactionIdsFromMeta() {
+    final raw = BudgetBoxes.meta.get(_removedTxMetaKey);
+    if (raw is Iterable) {
+      return raw
+          .map((e) => e?.toString() ?? '')
+          .where((id) => id.isNotEmpty)
+          .toSet();
+    }
+    if (raw is String && raw.isNotEmpty) {
+      return {raw};
+    }
+    return <String>{};
+  }
+
+  static Future<void> rememberRemovedTransactionId(String txnId) async {
+    if (txnId.isEmpty) return;
+    final ids = removedTransactionIdsFromMeta();
+    if (ids.contains(txnId)) return;
+    ids.add(txnId);
+    await BudgetBoxes.meta.put(_removedTxMetaKey, ids.toList());
+  }
+
+  static Set<String> allRemovedTransactionIds() {
+    final ids = removedTransactionIdsFromMeta();
+    if (!Hive.isBoxOpen(BudgetBoxes.txBoxName)) {
+      return ids;
+    }
+    final box = BudgetBoxes.tx;
+    for (final txn in box.values) {
+      if (txn.removed) {
+        ids.add(txn.id);
+      }
+    }
+    return ids;
+  }
+
   /// Upsert a batch of normalized transactions (idempotent).
   /// - Merges `reviewed` from existing entries
   /// - Applies merchant overrides, then API category, then heuristic
@@ -20,6 +59,7 @@ class TransactionsStore {
 
     final Map<dynamic, BudgetTransaction> updates = {};
     final List<BudgetTransaction> adds = [];
+    final removedMetaIds = removedTransactionIdsFromMeta();
 
     for (final j in items) {
       final incoming = BudgetTransaction.fromApi(j);
@@ -37,7 +77,14 @@ class TransactionsStore {
                 .toList(),
           );
 
-      final upsert = incoming.copyWith(category: category, reviewed: reviewed);
+      final bool keepRemovedStatus = prev?.status == 'removed';
+      final bool markRemoved =
+          keepRemovedStatus || removedMetaIds.contains(incoming.id);
+      final upsert = incoming.copyWith(
+        category: category,
+        reviewed: markRemoved ? true : reviewed,
+        status: markRemoved ? 'removed' : null,
+      );
 
       if (prevKey != null) {
         updates[prevKey] = upsert;

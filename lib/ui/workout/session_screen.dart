@@ -10,6 +10,8 @@ import 'package:kontinuum/services/workout_stat_engine.dart';
 import 'workout_editor_constants.dart';
 import 'workout_overview_screen.dart';
 import 'session_screen_args.dart';
+import 'session_widgets/muscle_utils.dart' show computeWorkoutCoverage;
+import 'session_widgets/session_screen_widgets.dart' show ExerciseRadarChart;
 
 class SessionScreen extends StatelessWidget {
   const SessionScreen({super.key, this.args});
@@ -32,6 +34,32 @@ class SessionScreen extends StatelessWidget {
         context.watch<FitnessProfileProvider>().profile;
 
     final SessionDraft? activeDraft = workoutProvider.activeDraft;
+    final SessionInvalidationNotice? pendingInvalidation =
+        workoutProvider.consumeSessionInvalidation();
+    if (pendingInvalidation != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!context.mounted) return;
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Session reset'),
+            content: const Text(
+              'This workout was edited while a session was in progress. '
+              'The session has been reset so you can start fresh with the updated workout.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+        if (context.mounted) {
+          Navigator.of(context).maybePop();
+        }
+      });
+    }
     final String? workoutId =
         resolvedArgs.workoutId ?? activeDraft?.workoutId;
     final Workout? workout =
@@ -45,6 +73,8 @@ class SessionScreen extends StatelessWidget {
     final SessionScreenArgs navArgs = SessionScreenArgs(
       workoutId: workout?.id ?? resolvedArgs.workoutId ?? activeDraft?.workoutId,
       attachToRoutineId: resolvedArgs.attachToRoutineId ?? activeDraft?.routineId,
+      scheduledDate: resolvedArgs.scheduledDate,
+      scheduledDateIso: resolvedArgs.scheduledDateIso,
     );
 
     return Scaffold(
@@ -98,6 +128,9 @@ class _SessionOverview extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final WorkoutStatSummary? stats = summary;
+    final Map<String, double> coverage =
+        workout.blocks.isEmpty ? const {} : computeWorkoutCoverage(workout);
+    final bool showRadar = coverage.values.any((double v) => v > 0.0);
 
     return Column(
       children: [
@@ -108,6 +141,16 @@ class _SessionOverview extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (stats != null && showRadar) ...[
+                    SizedBox(
+                      height: 220,
+                      child: ExerciseRadarChart(
+                        coverage: coverage,
+                        accentColor: const Color(0xFF21D07A),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
                   Text(
                     workout.title.isEmpty ? 'Untitled Workout' : workout.title,
                     textAlign: TextAlign.center,

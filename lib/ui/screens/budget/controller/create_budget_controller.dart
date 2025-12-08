@@ -12,6 +12,7 @@ class CreateBudgetController extends ChangeNotifier {
       _title = initial.title;
       _monthlyAmount = initial.monthlyAmount;
       _unallocatedAsSavings = initial.unallocatedAsSavings;
+      _cadence = initial.cadence;
 
       // Deep copy categories; remap recurring.category references.
       final Map<BudgetCategory, BudgetCategory> map = {};
@@ -34,6 +35,7 @@ class CreateBudgetController extends ChangeNotifier {
   final List<BudgetCategory> _categories = <BudgetCategory>[];
   final List<RecurringExpense> _recurrings = <RecurringExpense>[];
   bool _unallocatedAsSavings = false;
+  BudgetTimeSpan _cadence = BudgetTimeSpan.monthly;
 
   /// ===== Getters =====
   String get title => _title;
@@ -41,6 +43,7 @@ class CreateBudgetController extends ChangeNotifier {
   List<BudgetCategory> get categories => List.unmodifiable(_categories);
   List<RecurringExpense> get recurrings => List.unmodifiable(_recurrings);
   bool get unallocatedAsSavings => _unallocatedAsSavings;
+  BudgetTimeSpan get cadence => _cadence;
 
   bool get hasAllocation => _recurrings.isNotEmpty;
 
@@ -52,6 +55,22 @@ class CreateBudgetController extends ChangeNotifier {
 
   void setMonthlyAmount(int? dollars) {
     _monthlyAmount = (dollars ?? 0) < 0 ? 0 : dollars;
+    notifyListeners();
+  }
+
+  void setCadence(BudgetTimeSpan cadence) {
+    if (_cadence == cadence) return;
+    final prev = _cadence;
+    _cadence = cadence;
+    if (_monthlyAmount != null) {
+      final cents = _monthlyAmount! * 100;
+      final converted = _convertAmountBetweenSpans(
+        cents,
+        from: prev,
+        to: cadence,
+      );
+      _monthlyAmount = (converted / 100).round();
+    }
     notifyListeners();
   }
 
@@ -101,15 +120,13 @@ class CreateBudgetController extends ChangeNotifier {
   }
 
   /// ===== Budget math =====
-  int _toMonthlyCents(RecurringExpense r) {
-    switch (r.cadence) {
-      case Recurrence.weekly:
-        return (r.amountCents * 4.345).round();
-      case Recurrence.monthly:
-        return r.amountCents;
-      case Recurrence.yearly:
-        return (r.amountCents / 12).round();
-    }
+  int _recurringCentsForCurrentSpan(RecurringExpense r) {
+    final fromDays = _daysForRecurrence(r.cadence);
+    final toDays = _daysForSpan(_cadence);
+    if (fromDays == toDays) return r.amountCents;
+    if (fromDays <= 0 || toDays <= 0) return r.amountCents;
+    final perDay = r.amountCents / fromDays;
+    return (perDay * toDays).round();
   }
 
   int get monthCents => (_monthlyAmount ?? 0) * 100;
@@ -123,8 +140,8 @@ class CreateBudgetController extends ChangeNotifier {
       if (r.category == null) continue;
       totals.update(
         r.category!,
-        (prev) => prev + _toMonthlyCents(r),
-        ifAbsent: () => _toMonthlyCents(r),
+        (prev) => prev + _recurringCentsForCurrentSpan(r),
+        ifAbsent: () => _recurringCentsForCurrentSpan(r),
       );
     }
     return totals;
@@ -133,7 +150,7 @@ class CreateBudgetController extends ChangeNotifier {
   int allocatedSumCents() {
     int s = 0;
     for (final r in _recurrings) {
-      if (r.category != null) s += _toMonthlyCents(r);
+      if (r.category != null) s += _recurringCentsForCurrentSpan(r);
     }
     return s;
   }
@@ -181,6 +198,44 @@ class CreateBudgetController extends ChangeNotifier {
       categories: List<BudgetCategory>.from(_categories),
       recurrings: List<RecurringExpense>.from(_recurrings),
       unallocatedAsSavings: _unallocatedAsSavings,
+      cadence: _cadence,
     );
+  }
+
+  int _convertAmountBetweenSpans(
+    int amountCents, {
+    required BudgetTimeSpan from,
+    required BudgetTimeSpan to,
+  }) {
+    final fromDays = _daysForSpan(from);
+    final toDays = _daysForSpan(to);
+    if (fromDays == toDays) return amountCents;
+    if (fromDays <= 0 || toDays <= 0) return amountCents;
+    final perDay = amountCents / fromDays;
+    return (perDay * toDays).round();
+  }
+
+  int _daysForSpan(BudgetTimeSpan span) {
+    switch (span) {
+      case BudgetTimeSpan.weekly:
+        return 7;
+      case BudgetTimeSpan.monthly:
+        return 30;
+      case BudgetTimeSpan.yearly:
+        return 365;
+      case BudgetTimeSpan.custom:
+        return 30;
+    }
+  }
+
+  int _daysForRecurrence(Recurrence cadence) {
+    switch (cadence) {
+      case Recurrence.weekly:
+        return 7;
+      case Recurrence.monthly:
+        return 30;
+      case Recurrence.yearly:
+        return 365;
+    }
   }
 }

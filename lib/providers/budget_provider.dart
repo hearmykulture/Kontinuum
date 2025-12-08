@@ -1,6 +1,7 @@
 // lib/providers/budget_provider.dart
 
 import 'dart:collection';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -18,6 +19,7 @@ class Budget {
     required this.categories,
     required this.recurrings,
     required this.unallocatedAsSavings,
+    this.cadence = BudgetTimeSpan.monthly,
     DateTime? createdAt,
     DateTime? updatedAt,
   })  : createdAt = createdAt ?? AppClock.now(),
@@ -33,6 +35,7 @@ class Budget {
   final bool unallocatedAsSavings;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final BudgetTimeSpan cadence;
 
   Budget copyWith({
     String? title,
@@ -42,6 +45,7 @@ class Budget {
     bool? unallocatedAsSavings,
     DateTime? createdAt,
     DateTime? updatedAt,
+    BudgetTimeSpan? cadence,
   }) {
     return Budget(
       id: id,
@@ -52,6 +56,7 @@ class Budget {
       unallocatedAsSavings: unallocatedAsSavings ?? this.unallocatedAsSavings,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? AppClock.now(),
+      cadence: cadence ?? this.cadence,
     );
   }
 
@@ -62,6 +67,7 @@ class Budget {
       categories: categories.map((c) => c.copyWith()).toList(growable: false),
       recurrings: recurrings.map((r) => r.copyWith()).toList(growable: false),
       unallocatedAsSavings: unallocatedAsSavings,
+      cadence: cadence,
     );
   }
 
@@ -79,6 +85,7 @@ class Budget {
       recurrings:
           draft.recurrings.map((r) => r.copyWith()).toList(growable: false),
       unallocatedAsSavings: draft.unallocatedAsSavings,
+      cadence: draft.cadence,
       createdAt: createdAt,
     );
   }
@@ -96,23 +103,16 @@ class Budget {
   /// Monthly amount expressed in cents.
   int get monthlyAmountCents => monthlyAmount * 100;
 
-  /// Convert this budget's monthly amount into a total (in cents) for the given [span].
-  ///
-  /// For `weekly` and `yearly`, this uses a simple normalization:
-  ///   - weekly ≈ monthly / 4
-  ///   - yearly = monthly * 12
-  ///
-  /// For `custom`, if [spanStart] and [spanEnd] are provided, the amount is
-  /// scaled linearly based on the number of days in the window
-  /// (30 days ≈ 1 month). Otherwise it falls back to the monthly amount.
+  /// Convert this budget's amount into a total (in cents) for the given [span].
   int amountCentsForSpan(
     BudgetTimeSpan span, {
     DateTime? spanStart,
     DateTime? spanEnd,
   }) {
-    return normalizeMonthlyAmountForSpan(
+    return _convertAmountBetweenSpans(
       monthlyAmountCents,
-      span,
+      from: cadence,
+      to: span,
       spanStart: spanStart,
       spanEnd: spanEnd,
     );
@@ -125,19 +125,67 @@ class Budget {
     DateTime? spanStart,
     DateTime? spanEnd,
   }) {
+    return _convertAmountBetweenSpans(
+      monthlyAmountCents,
+      from: BudgetTimeSpan.monthly,
+      to: span,
+      spanStart: spanStart,
+      spanEnd: spanEnd,
+    );
+  }
+
+  static int convertAmountBetweenSpans(
+    int amountCents, {
+    required BudgetTimeSpan from,
+    required BudgetTimeSpan to,
+    DateTime? spanStart,
+    DateTime? spanEnd,
+  }) {
+    return _convertAmountBetweenSpans(
+      amountCents,
+      from: from,
+      to: to,
+      spanStart: spanStart,
+      spanEnd: spanEnd,
+    );
+  }
+
+  static int _convertAmountBetweenSpans(
+    int amountCents, {
+    required BudgetTimeSpan from,
+    required BudgetTimeSpan to,
+    DateTime? spanStart,
+    DateTime? spanEnd,
+  }) {
+    final fromDays = _daysForSpan(from);
+    final toDays = _daysForSpan(
+      to,
+      spanStart: spanStart,
+      spanEnd: spanEnd,
+    );
+    if (fromDays == toDays) return amountCents;
+    if (fromDays <= 0 || toDays <= 0) return amountCents;
+    final perDay = amountCents / fromDays;
+    return (perDay * toDays).round();
+  }
+
+  static int _daysForSpan(
+    BudgetTimeSpan span, {
+    DateTime? spanStart,
+    DateTime? spanEnd,
+  }) {
     switch (span) {
       case BudgetTimeSpan.weekly:
-        return (monthlyAmountCents / 4).round();
+        return 7;
       case BudgetTimeSpan.monthly:
-        return monthlyAmountCents;
+        return 30;
       case BudgetTimeSpan.yearly:
-        return monthlyAmountCents * 12;
+        return 365;
       case BudgetTimeSpan.custom:
         if (spanStart == null || spanEnd == null) {
-          return monthlyAmountCents;
+          return 30;
         }
-        final days = spanEnd.difference(spanStart).inDays + 1;
-        return ((monthlyAmountCents / 30) * days).round();
+        return math.max(1, spanEnd.difference(spanStart).inDays + 1);
     }
   }
 
@@ -152,6 +200,7 @@ class Budget {
       unallocatedAsSavings: unallocatedAsSavings,
       createdAt: createdAt,
       updatedAt: updatedAt,
+      cadenceIndex: cadence.index,
     );
   }
 
@@ -189,7 +238,16 @@ class Budget {
       unallocatedAsSavings: hive.unallocatedAsSavings,
       createdAt: hive.createdAt,
       updatedAt: hive.updatedAt,
+      cadence: _cadenceFromIndex(hive.cadenceIndex),
     );
+  }
+
+  static BudgetTimeSpan _cadenceFromIndex(int? index) {
+    final safeIndex =
+        index != null && index >= 0 && index < BudgetTimeSpan.values.length
+            ? index
+            : BudgetTimeSpan.monthly.index;
+    return BudgetTimeSpan.values[safeIndex];
   }
 
   static BudgetCategoryHive _categoryToHive(BudgetCategory cat) {
@@ -390,6 +448,7 @@ class BudgetProvider with ChangeNotifier {
           original.recurrings.map((r) => r.copyWith()).toList(growable: false),
       unallocatedAsSavings: original.unallocatedAsSavings,
       createdAt: AppClock.now(),
+      cadence: original.cadence,
     );
     _budgets.add(clone);
     await _persist();

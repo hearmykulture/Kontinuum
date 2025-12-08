@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:hive/hive.dart';
 
 import 'package:kontinuum/models/session_state.dart';
+import 'package:kontinuum/models/workout_models.dart';
 import 'package:kontinuum/services/workout_boxes.dart';
 
 /// Centralized persistence for in-progress workout sessions.
@@ -57,9 +58,6 @@ class SessionPersistenceService {
   ///   2) If it has a [workoutId] and [scheduledDateIso], also stores it under
   ///      "<workoutId>|<YYYY-MM-DD>" so it can be looked up per day.
   ///
-  /// NEW: If the mapped workout/day is currently flagged as a REST day by the
-  /// schedule, the snapshot is **not** persisted at all. This prevents drafts
-  /// from being recreated or resumed on rest days.
   static Future<void> saveSession(WorkoutSessionState state) async {
     // If this snapshot belongs to a programmed REST day, don't persist it.
     if (isRestDayForSession(state)) {
@@ -94,6 +92,7 @@ class SessionPersistenceService {
   static WorkoutSessionState? getCurrentSession() {
     final WorkoutSessionState? state = _safeGet(_kCurrentKey);
     if (state == null || !state.isValid) return null;
+    if ((state.routineId ?? '').isEmpty) return null;
     if (isRestDayForSession(state)) {
       return null;
     }
@@ -111,7 +110,10 @@ class SessionPersistenceService {
     // Fast path: compound key.
     final String key = _compoundKey(workoutId, scheduledDateYmd);
     final WorkoutSessionState? direct = _safeGet(key);
-    if (direct != null && direct.isValid && !isRestDayForSession(direct)) {
+    if (direct != null &&
+        direct.isValid &&
+        (direct.routineId ?? '').isNotEmpty &&
+        !isRestDayForSession(direct)) {
       return direct;
     }
 
@@ -122,6 +124,7 @@ class SessionPersistenceService {
 
       final WorkoutSessionState? s = _safeGet(rawKey);
       if (s == null || !s.isValid) continue; // ignore legacy map/object shapes
+      if ((s.routineId ?? '').isEmpty) continue;
       if (s.workoutId != workoutId) continue;
       if (isRestDayForSession(s)) continue;
 
@@ -190,17 +193,46 @@ class SessionPersistenceService {
       return false;
     }
 
+    // Global one-off "skip today" overrides take priority.
+    if (WorkoutBoxes.hasRestOverrideFor(date)) {
+      return true;
+    }
+
+    // Routine-level rest schedule (if known) is authoritative, just like
+    // WorkoutProvider.isRestDay.
+    bool? restFromRoutine;
+    final String? routineId = state.routineId;
+    if (routineId != null && routineId.isNotEmpty) {
+      try {
+        final Routine? routine = WorkoutBoxes.routinesBox.get(routineId);
+        if (routine?.restSchedule != null) {
+          restFromRoutine = routine!.restSchedule!.isRestOn(date);
+        }
+      } catch (_) {
+        // best-effort
+      }
+    }
+
+    bool scheduleRest = false;
     for (final schedule in WorkoutBoxes.schedulesBox.values) {
       try {
         final dynamic s = schedule;
         if (s.workoutId != workoutId) continue;
+        s.normalizeWeeklyLength();
         if (s.isRestDay(date) == true) {
-          return true;
+          scheduleRest = true;
+          break;
         }
       } catch (_) {
         // Ignore mis-shaped schedule entries.
       }
     }
+
+    if (restFromRoutine != null) {
+      return restFromRoutine!;
+    }
+
+    if (scheduleRest) return true;
 
     return false;
   }
@@ -231,6 +263,128 @@ class SessionPersistenceService {
         current.workoutId == workoutId &&
         _extractYmd(current.scheduledDateIso ?? current.savedAtIso) ==
             scheduledDateYmd) {
+      await box.delete(_kCurrentKey);
+    }
+  }
+
+  /// Clear every session snapshot (regardless of workout) tied to [date].
+  ///
+  /// Used when a one-off rest override is created so stale drafts cannot be
+  /// resumed for a day that now counts as "skipped".
+  static Future<void> clearSessionsForDate(DateTime date) async {
+    final box = _box;
+    final String targetYmd = dateTimeToYmd(date);
+    final List<dynamic> keysToDelete = <dynamic>[];
+
+    for (final dynamic key in box.keys) {
+      if (key == _kCurrentKey) continue;
+
+      final WorkoutSessionState? state = _safeGet(key);
+      if (state != null) {
+        final String? ymd =
+            _extractYmd(state.scheduledDateIso ?? state.savedAtIso);
+        if (ymd == targetYmd) {
+          keysToDelete.add(key);
+        }
+        continue;
+      }
+
+      if (key is String && key.endsWith('|$targetYmd')) {
+        keysToDelete.add(key);
+      }
+    }
+
+    for (final dynamic key in keysToDelete) {
+      await box.delete(key);
+    }
+
+    final WorkoutSessionState? current = _safeGet(_kCurrentKey);
+    if (current != null) {
+      final String? currentYmd =
+          _extractYmd(current.scheduledDateIso ?? current.savedAtIso);
+      if (currentYmd == targetYmd) {
+        await box.delete(_kCurrentKey);
+      }
+    }
+  }
+
+  /// Clear any sessions tied to [routine] that now fall on a rest day according
+  /// to the routine's current [RestSchedule].
+  static Future<void> clearSessionsForRoutine(Routine routine) async {
+    final restSchedule = routine.restSchedule;
+    if (restSchedule == null) return;
+
+    final box = _box;
+    final List<dynamic> keysToDelete = <dynamic>[];
+
+    for (final dynamic key in box.keys) {
+      final WorkoutSessionState? state = _safeGet(key);
+      if (state == null) continue;
+      if (state.routineId != routine.id) continue;
+
+      final String? ymd =
+          _extractYmd(state.scheduledDateIso ?? state.savedAtIso);
+      if (ymd == null) continue;
+
+      DateTime? date;
+      try {
+        date = DateTime.parse(ymd);
+      } catch (_) {
+        continue;
+      }
+
+      if (restSchedule.isRestOn(date)) {
+        keysToDelete.add(key);
+      }
+    }
+
+    for (final dynamic key in keysToDelete) {
+      await box.delete(key);
+    }
+
+    final WorkoutSessionState? current = _safeGet(_kCurrentKey);
+    if (current != null && current.routineId == routine.id) {
+      final String? ymd =
+          _extractYmd(current.scheduledDateIso ?? current.savedAtIso);
+      if (ymd != null) {
+        try {
+          final DateTime date = DateTime.parse(ymd);
+          if (restSchedule.isRestOn(date)) {
+            await box.delete(_kCurrentKey);
+          }
+        } catch (_) {
+          // ignore malformed dates
+        }
+      }
+    }
+  }
+
+  /// Clear any persisted session snapshots (current or per-day) for [workoutId].
+  ///
+  /// Used when the workout definition changes so that in-progress drafts don't
+  /// refer to stale exercise structures.
+  static Future<void> clearSessionsForWorkout(String workoutId) async {
+    if (workoutId.isEmpty) return;
+    final box = _box;
+    final List<dynamic> keysToDelete = <dynamic>[];
+
+    for (final dynamic key in box.keys) {
+      final WorkoutSessionState? state = _safeGet(key);
+      if (state != null && state.workoutId == workoutId) {
+        keysToDelete.add(key);
+      } else if (state == null &&
+          key is String &&
+          key.startsWith('$workoutId|')) {
+        keysToDelete.add(key);
+      }
+    }
+
+    for (final dynamic key in keysToDelete) {
+      await box.delete(key);
+    }
+
+    final WorkoutSessionState? current = _safeGet(_kCurrentKey);
+    if (current != null && current.workoutId == workoutId) {
       await box.delete(_kCurrentKey);
     }
   }

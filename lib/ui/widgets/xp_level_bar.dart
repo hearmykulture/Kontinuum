@@ -1,15 +1,21 @@
 // lib/ui/widgets/xp_level_bar.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart'; // HapticFeedback
 import 'package:provider/provider.dart';
 import 'package:kontinuum/providers/objective_provider.dart';
 import 'package:kontinuum/data/level_utils.dart';
+import 'package:kontinuum/ui/screens/create_objective_screen2.dart';
 
 class XpLevelBarController extends ChangeNotifier {
   _XpLevelBarState? _state;
   void _attach(_XpLevelBarState s) => _state = s;
   void _detach(_XpLevelBarState s) {
     if (identical(_state, s)) _state = null;
+  }
+
+  bool isPointInsidePlusBadge(Offset globalPosition) {
+    return _state?._isPointInsidePlusBadge(globalPosition) ?? false;
   }
 
   /// Jump the bar to [categoryName] (null or "TOTAL" for global)
@@ -41,9 +47,14 @@ class XpLevelBar extends StatefulWidget {
   State<XpLevelBar> createState() => _XpLevelBarState();
 }
 
+const double _kXpBadgeSize = 56;
+const double _kXpBadgeOffset = _kXpBadgeSize / 2;
+const double _kXpBadgeLift = 12;
+
 class _XpLevelBarState extends State<XpLevelBar> with TickerProviderStateMixin {
   // -1 = TOTAL, 0+ = per-category index
   int _viewIndex = -1;
+  final GlobalKey _plusBadgeKey = GlobalKey(debugLabel: 'xp_plus_badge');
 
   // Animated XP counting
   late final AnimationController _xpAnim;
@@ -140,6 +151,23 @@ class _XpLevelBarState extends State<XpLevelBar> with TickerProviderStateMixin {
       ..forward();
   }
 
+  bool _isPointInsidePlusBadge(Offset globalPosition) {
+    final ctx = _plusBadgeKey.currentContext;
+    if (ctx == null) return false;
+    final renderBox = ctx.findRenderObject() as RenderBox?;
+    if (renderBox == null || !renderBox.hasSize || !renderBox.attached) {
+      return false;
+    }
+    final Offset topLeft = renderBox.localToGlobal(Offset.zero);
+    final Size size = renderBox.size;
+    final double dx = globalPosition.dx;
+    final double dy = globalPosition.dy;
+    return dx >= topLeft.dx &&
+        dx <= topLeft.dx + size.width &&
+        dy >= topLeft.dy &&
+        dy <= topLeft.dy + size.height;
+  }
+
   Color _colorForCategory(String name) {
     switch (name.toLowerCase()) {
       case 'rapping':
@@ -160,7 +188,7 @@ class _XpLevelBarState extends State<XpLevelBar> with TickerProviderStateMixin {
   }
 
   // ---------- Replaces the Dart record with a simple class ----------
-  _DerivedXp _deriveFromXp(int xp) {
+  _DerivedXp _deriveFromCategoryXp(int xp) {
     final lvl = LevelUtils.getCategoryLevelFromXp(xp);
     final low = LevelUtils.getXpForCategoryLevel(lvl);
     final next = LevelUtils.getXpForCategoryLevel(lvl + 1);
@@ -191,6 +219,16 @@ class _XpLevelBarState extends State<XpLevelBar> with TickerProviderStateMixin {
     setState(() => _viewIndex = -1);
     HapticFeedback.selectionClick();
     _kickBounce();
+  }
+
+  Future<void> _openCreateObjective() async {
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const CreateObjectiveScreen2(),
+        fullscreenDialog: true,
+      ),
+    );
   }
 
   // ----- Upward-drag detection → open stats -----
@@ -228,20 +266,43 @@ class _XpLevelBarState extends State<XpLevelBar> with TickerProviderStateMixin {
     String label = "TOTAL";
     Color color = _kTotalColor;
     int liveXp;
+    int level;
+    int nextLevelXp;
+    double progress;
+    int currentLevelStartXp;
     if (safeIndex == -1) {
       liveXp = provider.totalXp;
+      level = provider.totalLevel;
+      nextLevelXp = provider.totalXpForNextLevel;
+      currentLevelStartXp = provider.totalXpForCurrentLevel;
     } else {
       final cat = categories[safeIndex];
       label = cat.name.toUpperCase();
       color = _colorForCategory(cat.name);
       liveXp = cat.xp;
+      final derived = _deriveFromCategoryXp(liveXp);
+      level = derived.level;
+      nextLevelXp = derived.nextLevelXp;
+      progress = derived.progress;
+      currentLevelStartXp = LevelUtils.getXpForCategoryLevel(derived.level);
     }
 
     return AnimatedBuilder(
       animation: Listenable.merge([_xpAnim, _bounce]),
       builder: (_, __) {
         final shownXp = _xpTween?.value ?? liveXp;
-        final m = _deriveFromXp(shownXp);
+        if (safeIndex == -1) {
+          final span = (nextLevelXp - currentLevelStartXp);
+          progress = span <= 0
+              ? 0.0
+              : ((shownXp - currentLevelStartXp) / span).clamp(0.0, 1.0);
+        } else {
+          final derived = _deriveFromCategoryXp(shownXp);
+          level = derived.level;
+          nextLevelXp = derived.nextLevelXp;
+          progress = derived.progress;
+          currentLevelStartXp = LevelUtils.getXpForCategoryLevel(level);
+        }
 
         return Padding(
           // ~10% less vertical padding
@@ -270,26 +331,40 @@ class _XpLevelBarState extends State<XpLevelBar> with TickerProviderStateMixin {
                 onTap: _cycleForward,
                 onLongPress: _resetToTotal,
 
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 220),
-                  switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeInCubic,
-                  transitionBuilder: (child, anim) =>
-                      FadeTransition(opacity: anim, child: child),
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  alignment: Alignment.topCenter,
+                  children: [
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 220),
+                      switchInCurve: Curves.easeOutCubic,
+                      switchOutCurve: Curves.easeInCubic,
+                      transitionBuilder: (child, anim) =>
+                          FadeTransition(opacity: anim, child: child),
 
-                  // 🔑 Only fade when the category index changes (not every XP tick)
-                  child: _BarContent(
-                    key: ValueKey<int>(safeIndex),
-                    color: color,
-                    label: label,
-                    level: m.level,
-                    progress: m.progress,
-                    shownXp: shownXp,
-                    nextLevelXp: m.nextLevelXp,
-                    bounceScale: _bounceScale,
-                    onStatsPressed:
-                        widget.onStatsPressed, // ← tap icon opens Stats
-                  ),
+                      // 🔑 Only fade when the category index changes (not every XP tick)
+                      child: _BarContent(
+                        key: ValueKey<int>(safeIndex),
+                        color: color,
+                        label: label,
+                        level: level,
+                        progress: progress,
+                        shownXp: shownXp,
+                        nextLevelXp: nextLevelXp,
+                        bounceScale: _bounceScale,
+                        onStatsPressed:
+                            widget.onStatsPressed, // ← tap icon opens Stats
+                      ),
+                    ),
+                    Positioned(
+                      top: -_kXpBadgeOffset - _kXpBadgeLift,
+                      child: _XpBarPlusBadge(
+                        key: _plusBadgeKey,
+                        size: _kXpBadgeSize,
+                        onTap: _openCreateObjective,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -329,56 +404,71 @@ class _BarContent extends StatelessWidget {
     return Padding(
       // compact
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
-      child: Column(
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.topCenter,
         children: [
-          // Title row: icon pinned left, title stays centered.
-          Stack(
-            clipBehavior: Clip.none,
+          Column(
             children: [
-              Center(
-                child: Text(
-                  "Level $level: $label",
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
+              const SizedBox(height: 20),
+              // Title row: icon pinned left, title stays centered.
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Center(
+                    child: Text(
+                      "Level $level: $label",
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                        color: color,
+                      ),
+                    ),
+                  ),
+                  if (onStatsPressed != null)
+                    Positioned(
+                      left: 0,
+                      top: -2, // tiny upward nudge
+                      bottom: -2,
+                      child: _StatsHeaderButton(
+                        onPressed: onStatsPressed!, // ← tap -> open Stats
+                      ),
+                    ),
+                  const Positioned(
+                    right: 0,
+                    top: -2,
+                    bottom: -2,
+                    child: _NotebookHeaderIcon(),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+
+              // Progress bar
+              ScaleTransition(
+                scale: bounceScale,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    backgroundColor: Colors.grey.shade800,
                     color: color,
+                    minHeight: 9,
                   ),
                 ),
               ),
-              if (onStatsPressed != null)
-                Positioned(
-                  left: 0,
-                  top: -2, // tiny upward nudge
-                  bottom: -2,
-                  child: _StatsHeaderButton(
-                    onPressed: onStatsPressed!, // ← tap -> open Stats
-                  ),
+
+              const SizedBox(height: 3),
+              Text(
+                "$shownXp / $nextLevelXp XP",
+                style: TextStyle(
+                  fontSize: 12,
+                  color: color.withValues(alpha: 0.75),
                 ),
+              ),
+              const SizedBox(height: 1),
             ],
           ),
-          const SizedBox(height: 5),
-
-          // Progress bar
-          ScaleTransition(
-            scale: bounceScale,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: LinearProgressIndicator(
-                value: progress,
-                backgroundColor: Colors.grey.shade800,
-                color: color,
-                minHeight: 9,
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 3),
-          Text(
-            "$shownXp / $nextLevelXp XP",
-            style:
-                TextStyle(fontSize: 12, color: color.withValues(alpha: 0.75)),
-          ),
-          const SizedBox(height: 1),
         ],
       ),
     );
@@ -417,6 +507,62 @@ class _StatsHeaderButton extends StatelessWidget {
                 semanticLabel: 'Stats',
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NotebookHeaderIcon extends StatelessWidget {
+  const _NotebookHeaderIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 32,
+      height: 26,
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: Transform.translate(
+          offset: const Offset(0, -1.0),
+          child: const Icon(
+            Icons.menu_book_outlined,
+            size: 21,
+            color: Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _XpBarPlusBadge extends StatelessWidget {
+  const _XpBarPlusBadge({super.key, required this.size, required this.onTap});
+
+  final double size;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      onVerticalDragStart: (_) {},
+      onVerticalDragUpdate: (_) {},
+      onVerticalDragEnd: (_) {},
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        width: size,
+        height: size,
+        decoration: const BoxDecoration(
+          color: Colors.black,
+          shape: BoxShape.circle,
+        ),
+        child: const Center(
+          child: Icon(
+            Icons.add,
+            size: 32,
+            color: Colors.white,
           ),
         ),
       ),

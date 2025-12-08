@@ -82,6 +82,30 @@ class SessionDraft {
   }) : exercises = exercises ?? <String, DraftExerciseState>{};
 }
 
+enum SessionStartError {
+  missingRoutineSelection,
+  routineNotFound,
+  workoutNotFound,
+}
+
+class SessionStartResult {
+  const SessionStartResult._(this.started, this.error, this.message);
+
+  final bool started;
+  final SessionStartError? error;
+  final String? message;
+
+  factory SessionStartResult.success() =>
+      const SessionStartResult._(true, null, null);
+
+  factory SessionStartResult.failure(
+    SessionStartError error,
+    String message,
+  ) {
+    return SessionStartResult._(false, error, message);
+  }
+}
+
 /// bridge so we can call it from here even if MissionProvider is still minimal
 extension MissionProviderWorkoutBridge on MissionProvider {
   void markMissionCompleted(String missionId) {
@@ -184,6 +208,12 @@ class WorkoutProvider extends ChangeNotifier {
       UnmodifiableListView(_schedules);
 
   SessionDraft? get activeDraft => _activeDraft;
+  SessionInvalidationNotice? _pendingSessionInvalidation;
+  SessionInvalidationNotice? consumeSessionInvalidation() {
+    final pending = _pendingSessionInvalidation;
+    _pendingSessionInvalidation = null;
+    return pending;
+  }
   Future<void> reloadFromStorage() async {
     _activeDraft = null;
     _syncFromHive();
@@ -254,6 +284,23 @@ class WorkoutProvider extends ChangeNotifier {
     return '${t}_$r';
   }
 
+  String _generateLogId(String workoutId, String dateYmd) {
+    final String base = '${workoutId}_$dateYmd';
+    final box = WorkoutBoxes.logsBox;
+    if (!box.containsKey(base)) return base;
+
+    int counter = 2;
+    String candidate = '${base}_r$counter';
+    while (box.containsKey(candidate)) {
+      counter++;
+      candidate = '${base}_r$counter';
+    }
+    debugPrint(
+      '[WorkoutProvider] Existing log for $base detected, issuing unique id=$candidate',
+    );
+    return candidate;
+  }
+
   // ---------------------------------------------------------------------------
   // ROUTINE CRUD
   // ---------------------------------------------------------------------------
@@ -282,6 +329,7 @@ class WorkoutProvider extends ChangeNotifier {
 
   Future<void> updateRoutine(Routine updated) async {
     await WorkoutBoxes.routinesBox.put(updated.id, updated);
+    await SessionPersistenceService.clearSessionsForRoutine(updated);
     _syncFromHive();
     notifyListeners();
   }
@@ -319,12 +367,14 @@ class WorkoutProvider extends ChangeNotifier {
     List<WorkoutBlock>? blocks,
     String? notes,
     String? attachToRoutineId,
+    bool isRestTemplate = false,
   }) async {
     final workout = Workout(
       id: _newId(),
       title: title,
       blocks: blocks ?? <WorkoutBlock>[],
       notes: notes,
+      isRestTemplate: isRestTemplate,
     );
 
     await WorkoutBoxes.workoutsBox.put(workout.id, workout);
@@ -341,9 +391,23 @@ class WorkoutProvider extends ChangeNotifier {
 
   Future<void> updateWorkout(Workout updated) async {
     await WorkoutBoxes.workoutsBox.put(updated.id, updated);
+    final SessionDraft? clearedDraft =
+        _activeDraft?.workoutId == updated.id ? _activeDraft : null;
+    if (clearedDraft != null) {
+      _activeDraft = null;
+      _pendingSessionInvalidation =
+          SessionInvalidationNotice(workoutId: updated.id, draft: clearedDraft);
+    }
+    await SessionPersistenceService.clearSessionsForWorkout(updated.id);
     _syncFromHive();
     notifyListeners();
+    if (clearedDraft != null) {
+      debugPrint(
+        '[WorkoutProvider] Active session for workout ${updated.id} cleared due to workout edit.',
+      );
+    }
   }
+
 
   /// central, deep-copy duplication
   Future<Workout> duplicateWorkout({
@@ -354,6 +418,7 @@ class WorkoutProvider extends ChangeNotifier {
       return WorkoutBlock(
         type: b.type,
         title: b.title,
+        note: b.note,
         items: b.items.map((it) {
           return WorkoutItem(
             exerciseId: it.exerciseId,
@@ -381,6 +446,7 @@ class WorkoutProvider extends ChangeNotifier {
       notes: source.notes,
       blocks: copiedBlocks,
       attachToRoutineId: attachToRoutineId,
+      isRestTemplate: source.isRestTemplate,
     );
 
     AnalyticsService.instance.log(
@@ -660,6 +726,7 @@ class WorkoutProvider extends ChangeNotifier {
       source: source,
       reason: reason,
     );
+    await SessionPersistenceService.clearSessionsForDate(normalized);
 
     AnalyticsService.instance.log(
       'workout_skip_today',
@@ -821,23 +888,48 @@ class WorkoutProvider extends ChangeNotifier {
     return ordered;
   }
 
-  void startSession({
+  SessionStartResult startSession({
     required String routineId,
     required String workoutId,
     String source = 'dashboard',
     String? missionId,
+    DateTime? calendarDayOverride,
   }) {
-    final routine = WorkoutBoxes.routinesBox.get(routineId);
-    final workout = WorkoutBoxes.workoutsBox.get(workoutId);
-    if (routine == null || workout == null) {
-      debugPrint('⚠️ WorkoutProvider.startSession: bad IDs');
-      return;
+    if (routineId.isEmpty) {
+      debugPrint(
+        '[WorkoutProvider] startSession blocked: no routine selected for workout $workoutId',
+      );
+      return SessionStartResult.failure(
+        SessionStartError.missingRoutineSelection,
+        'Select a routine before starting this workout.',
+      );
     }
+    final Routine? maybeRoutine = WorkoutBoxes.routinesBox.get(routineId);
+    if (maybeRoutine == null) {
+      debugPrint(
+        '[WorkoutProvider] startSession blocked: routine $routineId not found for workout $workoutId',
+      );
+      return SessionStartResult.failure(
+        SessionStartError.routineNotFound,
+        'That routine is no longer available.',
+      );
+    }
+    final workout = WorkoutBoxes.workoutsBox.get(workoutId);
+    if (workout == null) {
+      debugPrint('⚠️ WorkoutProvider.startSession: bad workout ID');
+      return SessionStartResult.failure(
+        SessionStartError.workoutNotFound,
+        'This workout could not be found.',
+      );
+    }
+    final Routine routine = maybeRoutine;
 
     final now = AppClock.now();
-    final DateTime calendarDay = DateTime(now.year, now.month, now.day);
+    final DateTime baseDay = calendarDayOverride ?? now;
+    final DateTime calendarDay =
+        DateTime(baseDay.year, baseDay.month, baseDay.day);
 
-    final bool routineRest = isRestDay(routineId, calendarDay);
+    final bool routineRest = isRestDay(routine.id, calendarDay);
     final bool workoutScheduled = isWorkoutScheduledForDay(
       workoutId,
       calendarDay,
@@ -845,7 +937,7 @@ class WorkoutProvider extends ChangeNotifier {
 
     _activeDraft = SessionDraft(
       id: _newId(),
-      routineId: routineId,
+      routineId: routine.id,
       workoutId: workoutId,
       source: source,
       missionId: missionId,
@@ -887,6 +979,7 @@ class WorkoutProvider extends ChangeNotifier {
             payload: {
               'routineId': routineId,
               'workoutId': workoutId,
+              'dateYmd': _formatYmd(calendarDay),
             },
           ),
           NotificationAction(
@@ -895,16 +988,20 @@ class WorkoutProvider extends ChangeNotifier {
             payload: {
               'workoutId': workoutId,
               'routineId': routineId,
+              'dateYmd': _formatYmd(calendarDay),
             },
           ),
         ],
         payload: {
           'routineId': routineId,
           'workoutId': workoutId,
+          'dateYmd': _formatYmd(calendarDay),
         },
         expiresAt: now.add(const Duration(hours: 6)),
       ),
     );
+
+    return SessionStartResult.success();
   }
 
   /// recreate a session from a past log (used by history/summary “repeat”)
@@ -1068,6 +1165,11 @@ class WorkoutProvider extends ChangeNotifier {
     }
   }
 
+  /// Public helper so other layers can estimate XP gains for a given exercise.
+  StatDelta statDeltaForExercise(String exerciseId) {
+    return _calcStatDeltaForExercise(exerciseId);
+  }
+
   int computeXpFromStatDelta(StatDelta delta) {
     return delta.strength +
         delta.hypertrophy +
@@ -1150,51 +1252,22 @@ class WorkoutProvider extends ChangeNotifier {
 
     final now = AppClock.now();
 
-    // Resolve the calendar day this session should count toward.
-    DateTime effectiveDay = DateTime(now.year, now.month, now.day);
-    String? rawScheduled;
-    String? rawSaved;
-
-    try {
-      final persistedSession = SessionPersistenceService.getCurrentSession();
-      rawScheduled = persistedSession?.scheduledDateIso;
-      rawSaved = persistedSession?.savedAtIso;
-
-      debugPrint(
-        '[WorkoutProvider] finishSession() reading persisted session → '
-        'workoutId=${persistedSession?.workoutId}, '
-        'scheduledDateIso=$rawScheduled, '
-        'savedAtIso=$rawSaved',
-      );
-
-      if (persistedSession != null) {
-        final String? raw = (rawScheduled != null && rawScheduled.isNotEmpty)
-            ? rawScheduled
-            : rawSaved;
-
-        if (raw != null && raw.isNotEmpty) {
-          final parsed = _parseYmdFlexible(raw);
-          if (parsed != null) {
-            effectiveDay = parsed;
-          }
-        }
-      }
-    } catch (e, st) {
-      debugPrint(
-        '[WorkoutProvider] finishSession() error reading session dates: $e\n$st',
-      );
-    }
-
+    // Resolve the calendar day this session should count toward using the
+    // draft’s bound calendarDay.
+    final DateTime effectiveDay = DateTime(
+      draft.calendarDay.year,
+      draft.calendarDay.month,
+      draft.calendarDay.day,
+    );
     final String dateYmd = _formatYmd(effectiveDay);
 
     debugPrint(
       '[WorkoutProvider] finishSession() resolved day → '
-      'effectiveDay=$effectiveDay, dateYmd=$dateYmd '
-      '(rawScheduled=$rawScheduled, rawSaved=$rawSaved)',
+      'effectiveDay=$effectiveDay, dateYmd=$dateYmd',
     );
 
-    // Generate unique log ID per completion: workoutId + date
-    final logId = '${draft.workoutId}_$dateYmd';
+    // Generate unique log ID per completion: workoutId + date (+ suffix for repeats)
+    final String logId = _generateLogId(draft.workoutId, dateYmd);
 
     debugPrint(
       '[WorkoutProvider] finishSession() → '
@@ -1268,10 +1341,18 @@ class WorkoutProvider extends ChangeNotifier {
     await NotificationDispatcher.dismiss('session_${draft.workoutId}');
     _activeDraft = null;
 
-    // Clear the persisted session now that we've written the log
+    // Clear both the scoped session (workout+day) and the generic pointer now
+    // that the log is written, so no “Resume” badge lingers after completion.
     try {
+      await SessionPersistenceService.clearSessionFor(
+        workoutId: draft.workoutId,
+        scheduledDateYmd: dateYmd,
+      );
       await SessionPersistenceService.clearSession();
-      debugPrint('[WorkoutProvider] finishSession() cleared persisted session');
+      debugPrint(
+        '[WorkoutProvider] finishSession() cleared persisted session '
+        'for workout ${draft.workoutId} on $dateYmd',
+      );
     } catch (e, st) {
       debugPrint(
         '[WorkoutProvider] finishSession() error clearing session: $e\n$st',
@@ -1844,4 +1925,10 @@ class WorkoutProvider extends ChangeNotifier {
 
     return out;
   }
+}
+
+class SessionInvalidationNotice {
+  SessionInvalidationNotice({required this.workoutId, required this.draft});
+  final String workoutId;
+  final SessionDraft draft;
 }

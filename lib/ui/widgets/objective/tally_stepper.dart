@@ -23,6 +23,7 @@ class TallyStepper extends StatefulWidget {
     this.radius = 18.0,
     this.backgroundColor = const Color(0x1AFFFFFF),
     this.textColor = Colors.white,
+    this.expandToWidth = false,
   });
 
   final int amount;
@@ -39,6 +40,7 @@ class TallyStepper extends StatefulWidget {
   final double radius; // corner radius for overlays/ring
   final Color backgroundColor; // base bg behind the row
   final Color textColor;
+  final bool expandToWidth; // stretch to fill parent width when true
 
   @override
   State<TallyStepper> createState() => _TallyStepperState();
@@ -198,6 +200,7 @@ class _TallyStepperState extends State<TallyStepper>
               Transform.scale(
                 scale: scale,
                 child: Container(
+                  width: widget.expandToWidth ? double.infinity : null,
                   height: widget.rowHeight,
                   padding: const EdgeInsets.symmetric(horizontal: 6),
                   decoration: BoxDecoration(
@@ -206,7 +209,9 @@ class _TallyStepperState extends State<TallyStepper>
                     border: Border.all(color: Colors.white12, width: 1.0),
                   ),
                   child: Row(
-                    mainAxisSize: MainAxisSize.min,
+                    mainAxisSize: widget.expandToWidth
+                        ? MainAxisSize.max
+                        : MainAxisSize.min,
                     children: [
                       IconButton(
                         tooltip: 'Decrease',
@@ -224,28 +229,23 @@ class _TallyStepperState extends State<TallyStepper>
                       const SizedBox(width: 6),
 
                       // Animated number
-                      AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 120),
-                        transitionBuilder: (child, anim) => FadeTransition(
-                          opacity: anim,
-                          child: ScaleTransition(
-                            scale: Tween<double>(
-                              begin: 0.88,
-                              end: 1.0,
-                            ).animate(anim),
-                            child: child,
+                      if (widget.expandToWidth)
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.center,
+                            child: _AnimatedNumber(
+                              amount: amount,
+                              fontSize: widget.numberFontSize,
+                              color: widget.textColor,
+                            ),
                           ),
+                        )
+                      else
+                        _AnimatedNumber(
+                          amount: amount,
+                          fontSize: widget.numberFontSize,
+                          color: widget.textColor,
                         ),
-                        child: Text(
-                          '$amount',
-                          key: ValueKey(amount),
-                          style: TextStyle(
-                            color: widget.textColor,
-                            fontWeight: FontWeight.w400,
-                            fontSize: widget.numberFontSize,
-                          ),
-                        ),
-                      ),
 
                       const SizedBox(width: 6),
 
@@ -317,6 +317,44 @@ class _TallyStepperState extends State<TallyStepper>
           ),
         );
       },
+    );
+  }
+}
+
+class _AnimatedNumber extends StatelessWidget {
+  final int amount;
+  final double fontSize;
+  final Color color;
+
+  const _AnimatedNumber({
+    required this.amount,
+    required this.fontSize,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 120),
+      transitionBuilder: (child, anim) => FadeTransition(
+        opacity: anim,
+        child: ScaleTransition(
+          scale: Tween<double>(
+            begin: 0.88,
+            end: 1.0,
+          ).animate(anim),
+          child: child,
+        ),
+      ),
+      child: Text(
+        '$amount',
+        key: ValueKey(amount),
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w400,
+          fontSize: fontSize,
+        ),
+      ),
     );
   }
 }

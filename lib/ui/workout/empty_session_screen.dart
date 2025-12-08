@@ -8,7 +8,9 @@ import 'package:kontinuum/models/workout_models.dart';
 import 'package:kontinuum/providers/workout_provider.dart';
 import 'package:kontinuum/services/exercise_library_service.dart';
 import 'package:kontinuum/services/session_persistence_service.dart';
+import 'package:kontinuum/services/workout_boxes.dart';
 import 'package:kontinuum/utils/text_format.dart';
+import 'package:kontinuum/services/analytics_service.dart';
 
 import 'add_exercise_popup_route.dart';
 import 'workout_timeline_screen.dart';
@@ -100,6 +102,11 @@ class _EmptyWorkoutSessionScreenState extends State<EmptyWorkoutSessionScreen>
   Timer? _autosaveTimer;
   WorkoutSessionState? _sessionToRestore;
   bool _hasRestoredSession = false;
+  bool _hydratedProviderDraft = false;
+  bool _restDialogShown = false;
+  bool _restCheckQueued = false;
+  bool _invalidationDialogShown = false;
+  bool _structureMismatchDialogShown = false;
 
   /// Normalized calendar day this session belongs to (YYYY-MM-DD, local).
   DateTime get _effectiveScheduledDate {
@@ -114,10 +121,19 @@ class _EmptyWorkoutSessionScreenState extends State<EmptyWorkoutSessionScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _checkForResumableSession();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _enforceRestDayIfNeeded();
+    });
 
     // Light autosave safety net (every 20s while screen is visible)
     _autosaveTimer = Timer.periodic(const Duration(seconds: 20), (_) {
-      _saveSessionState();
+      _enforceRestDayIfNeeded().then((shouldAbort) {
+        if (shouldAbort) {
+          _autosaveTimer?.cancel();
+          return;
+        }
+        _saveSessionState();
+      });
     });
   }
 
@@ -138,6 +154,24 @@ class _EmptyWorkoutSessionScreenState extends State<EmptyWorkoutSessionScreen>
   /// now lives in SessionScreen._updateResumeAvailability, which also checks
   /// for an actual completion log.
   void _checkForResumableSession() {
+    int _totalTargetSetsForWorkout(Workout? workout) {
+      if (workout == null) return 0;
+      final wp = context.read<WorkoutProvider>();
+      final resolved = wp.getWorkoutById(workout.id) ?? workout;
+      int total = 0;
+      for (final block in resolved.blocks) {
+        if (block.isPureNoteBlock == true || block.isBreakBlock == true) {
+          continue;
+        }
+        for (final item in block.items) {
+          if (item.targetSets > 0) {
+            total += item.targetSets;
+          }
+        }
+      }
+      return total;
+    }
+
     final workoutId = widget.workoutId;
     if (workoutId == null || workoutId.isEmpty) return;
 
@@ -169,37 +203,44 @@ class _EmptyWorkoutSessionScreenState extends State<EmptyWorkoutSessionScreen>
       return;
     }
 
-    final int targetSets = widget.targetSets ?? 3;
-    final bool isComplete = session.finalRestDone &&
-        session.completedSetsList.length >= targetSets;
+    // Hydrate provider draft with all saved sets so finishSession() has them.
+    _hydrateProviderDraftFromSession(session);
 
-    if (isComplete) {
-      final bool hasLogForDay =
-          SessionPersistenceService.hasLogForWorkoutOnDate(
+    // Workout-level completion: either a finished log exists for the day, or
+    // the session itself says it's complete (final rest done AND every set for
+    // the whole workout accounted for). This avoids treating a single finished
+    // exercise as a finished workout.
+    final bool hasLogForDay =
+        SessionPersistenceService.hasLogForWorkoutOnDate(
+      workoutId: workoutId,
+      scheduledDateYmd: targetYmd,
+    );
+    final int totalSetsFromSession =
+        session.completedSets.values.fold(0, (sum, v) => sum + v);
+    final int trueTargetSets =
+        _totalTargetSetsForWorkout(widget.workout ?? _resolveWorkoutFromProvider());
+    final int fallbackTotalSets =
+        session.completedSets.length * (widget.targetSets ?? 0);
+    final int expectedTotalSets =
+        trueTargetSets > 0 ? trueTargetSets : fallbackTotalSets;
+    final bool sessionThinksComplete = session.finalRestDone &&
+        totalSetsFromSession > 0 &&
+        expectedTotalSets > 0 &&
+        totalSetsFromSession >= expectedTotalSets;
+
+    if (hasLogForDay || sessionThinksComplete) {
+      debugPrint(
+        '[EmptyWorkoutSession] Session treated as complete '
+        '(finalRestDone=${session.finalRestDone}, '
+        'totalSetsFromSession=$totalSetsFromSession, '
+        'expectedTotalSets=$expectedTotalSets, '
+        'hasLog=$hasLogForDay) → clearing stale session',
+      );
+      SessionPersistenceService.clearSessionFor(
         workoutId: workoutId,
         scheduledDateYmd: targetYmd,
       );
-
-      if (hasLogForDay) {
-        debugPrint(
-          '[EmptyWorkoutSession] Session is already complete '
-          '(finalRestDone=${session.finalRestDone}, '
-          'sets=${session.completedSetsList.length}/$targetSets, log exists) '
-          '→ clearing stale session and starting fresh',
-        );
-        SessionPersistenceService.clearSessionFor(
-          workoutId: workoutId,
-          scheduledDateYmd: targetYmd,
-        );
-        return;
-      }
-
-      debugPrint(
-        '[EmptyWorkoutSession] Session is already complete '
-        '(finalRestDone=${session.finalRestDone}, '
-        'sets=${session.completedSetsList.length}/$targetSets) → '
-        'keeping snapshot for resume',
-      );
+      return;
     }
 
     // Only restore if the snapshot is actually for THIS block/exercise.
@@ -282,9 +323,18 @@ class _EmptyWorkoutSessionScreenState extends State<EmptyWorkoutSessionScreen>
     final Map<String, int> mergedCompletedSets =
         Map<String, int>.from(existing?.completedSets ?? const <String, int>{});
 
+    final Map<String, List<SavedSetData>> mergedExerciseSets = {
+      for (final entry in (existing?.exerciseSets ?? const <String, List<SavedSetData>>{}).entries)
+        entry.key: List<SavedSetData>.from(entry.value),
+    };
+
+    // Always derive the current exercise's completed count from fresh stats
+    // to avoid stale _savedCount during autosave/background saves.
+    final int currentExerciseCompleted = stats.length;
     final String exerciseKey =
         '${widget.currentBlockIndex}:${widget.exerciseIndex}';
-    mergedCompletedSets[exerciseKey] = _savedCount;
+    mergedCompletedSets[exerciseKey] = currentExerciseCompleted;
+    mergedExerciseSets[exerciseKey] = completedSetsList;
 
     final int totalCompletedSets =
         mergedCompletedSets.values.fold(0, (sum, v) => sum + v);
@@ -294,7 +344,7 @@ class _EmptyWorkoutSessionScreenState extends State<EmptyWorkoutSessionScreen>
       'scheduledDateIso=$scheduledDateIso, '
       'workoutId=$workoutId, '
       'finalRestDone=$_finalRestDone, '
-      'savedCountForThisExercise=$_savedCount, '
+      'savedCountForThisExercise=$currentExerciseCompleted, '
       'totalCompletedSets=$totalCompletedSets',
     );
 
@@ -318,9 +368,189 @@ class _EmptyWorkoutSessionScreenState extends State<EmptyWorkoutSessionScreen>
       finalRestStarted: _finalRestStarted,
       finalRestDone: _finalRestDone,
       scheduledDateIso: scheduledDateIso,
+      exerciseSets: mergedExerciseSets,
     );
 
-    SessionPersistenceService.saveSession(state);
+    unawaited(
+      SessionPersistenceService.saveSession(state).catchError((error, stack) {
+        debugPrint(
+          '[EmptyWorkoutSession] saveSession FAILED for workout=$workoutId '
+          'block=${widget.currentBlockIndex} exercise=${widget.exerciseIndex}: $error',
+        );
+        AnalyticsService.instance.log(
+          'workout_session_save_failed',
+          {
+            'workoutId': workoutId,
+            'routineId': widget.routineId,
+            'blockIndex': widget.currentBlockIndex,
+            'exerciseIndex': widget.exerciseIndex,
+            'scheduledDate': scheduledDateIso,
+            'error': '$error',
+          },
+        );
+      }),
+    );
+  }
+
+  void _hydrateProviderDraftFromSession(WorkoutSessionState state) {
+    if (_hydratedProviderDraft) return;
+    Workout? workout;
+    try {
+      workout = _resolveWorkoutFromProvider();
+    } catch (_) {}
+    if (workout == null) return;
+
+    final wp = context.read<WorkoutProvider>();
+    SessionDraft? draft = wp.activeDraft;
+
+    final String? routineId =
+        widget.routineId ?? state.routineId ?? draft?.routineId;
+
+    DateTime? persistedDay;
+    final String? rawDay = state.scheduledDateIso ?? state.savedAtIso;
+    if (rawDay != null && rawDay.isNotEmpty) {
+      final parsed = DateTime.tryParse(rawDay);
+      if (parsed != null) {
+        persistedDay = DateTime(parsed.year, parsed.month, parsed.day);
+      }
+    }
+
+    // If no draft exists (cold start), spin one up so finishSession() has data.
+    if (draft == null) {
+      try {
+        final result = wp.startSession(
+          routineId: routineId ?? '',
+          workoutId: workout.id,
+          source: 'resume_from_saved',
+          missionId: null,
+          calendarDayOverride: persistedDay,
+        );
+        if (!result.started) {
+          debugPrint(
+            '[EmptyWorkoutSession] Unable to rehydrate session draft: '
+            '${result.message}',
+          );
+          return;
+        }
+        draft = wp.activeDraft;
+      } catch (_) {
+        return;
+      }
+    }
+
+    if (draft == null || draft.workoutId != state.workoutId) return;
+
+    bool changed = false;
+
+    WorkoutItem? _workoutItemForKey(String key) {
+      final parts = key.split(':');
+      if (parts.length != 2) return null;
+      final int? blockIdx = int.tryParse(parts[0]);
+      final int? exIdx = int.tryParse(parts[1]);
+      if (blockIdx == null || exIdx == null) return null;
+      if (blockIdx < 0 ||
+          blockIdx >= workout!.blocks.length ||
+          exIdx < 0 ||
+          exIdx >= workout.blocks[blockIdx].items.length) {
+        return null;
+      }
+      return workout.blocks[blockIdx].items[exIdx];
+    }
+
+    bool _isZeroStatDelta(StatDelta delta) {
+      return delta.strength == 0 &&
+          delta.hypertrophy == 0 &&
+          delta.endurance == 0 &&
+          delta.mobility == 0;
+    }
+
+    // Ensure exerciseOrder contains all workout items.
+    for (final block in workout.blocks) {
+      for (final item in block.items) {
+        if (!draft.exerciseOrder.contains(item.exerciseId)) {
+          draft.exerciseOrder.add(item.exerciseId);
+        }
+      }
+    }
+
+    bool structureMismatch = false;
+
+    state.exerciseSets.forEach((key, savedSets) {
+      final WorkoutItem? workoutItem = _workoutItemForKey(key);
+      final String? exerciseId = workoutItem?.exerciseId;
+      if (exerciseId == null || exerciseId.isEmpty) {
+        structureMismatch = true;
+        return;
+      }
+
+      final existing = draft!.exercises[exerciseId];
+      if (existing != null && existing.sets.isNotEmpty) {
+        return;
+      }
+
+      final List<SetLog> setLogs = savedSets
+          .map(
+            (s) => SetLog(
+              reps: s.reps,
+              load: s.loadLb,
+              rpe: null,
+              notes: null,
+              tsMs: DateTime.tryParse(s.timestampIso)?.millisecondsSinceEpoch ??
+                  AppClock.now().millisecondsSinceEpoch,
+            ),
+          )
+          .toList();
+
+      final int targetSets = workoutItem?.targetSets ?? 0;
+      final bool inferredCompleted = targetSets > 0
+          ? setLogs.length >= targetSets
+          : setLogs.isNotEmpty;
+
+      bool completed = existing?.completed ?? inferredCompleted;
+      StatDelta statDelta = existing?.statDelta ?? StatDelta();
+
+      if (!completed) {
+        statDelta = StatDelta();
+      } else if (_isZeroStatDelta(statDelta)) {
+        statDelta = wp.statDeltaForExercise(exerciseId);
+      }
+
+      draft!.exercises[exerciseId] = DraftExerciseState(
+        exerciseId: exerciseId,
+        sets: setLogs,
+        completed: completed,
+        statDelta: statDelta,
+      );
+
+      if (!draft.exerciseOrder.contains(exerciseId)) {
+        draft.exerciseOrder.add(exerciseId);
+      }
+      changed = true;
+    });
+
+    if (structureMismatch) {
+      debugPrint(
+        '[EmptyWorkoutSession] Session snapshot no longer matches workout '
+        '(exercises removed or re-ordered). Resetting session.',
+      );
+      _sessionToRestore = null;
+      _savedCount = 0;
+      _finalRestStarted = false;
+      _finalRestDone = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _handleSessionStructureMismatch(wp);
+      });
+      return;
+    }
+
+    _hydratedProviderDraft = true;
+    if (changed) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          wp.notifyListeners();
+        }
+      });
+    }
   }
 
   void _restoreSessionState(WorkoutSessionState state) {
@@ -414,10 +644,153 @@ class _EmptyWorkoutSessionScreenState extends State<EmptyWorkoutSessionScreen>
     _saveSessionState();
   }
 
+  void _scheduleRestCheck() {
+    if (_restCheckQueued || _restDialogShown) return;
+    _restCheckQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _restCheckQueued = false;
+      _enforceRestDayIfNeeded();
+    });
+  }
+
+  void _consumeWorkoutInvalidationIfAny(WorkoutProvider provider) {
+    if (_invalidationDialogShown) return;
+    final SessionInvalidationNotice? notice =
+        provider.consumeSessionInvalidation();
+    if (notice == null) return;
+    _invalidationDialogShown = true;
+    _autosaveTimer?.cancel();
+    _saveSessionState();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Session reset'),
+          content: const Text(
+            'This workout was edited while your session was in progress. '
+            'Please review the updated workout and start again.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      if (mounted) {
+        Navigator.of(context).maybePop();
+      }
+    });
+  }
+
+  void _handleSessionStructureMismatch(WorkoutProvider provider) {
+    if (_structureMismatchDialogShown) return;
+    _structureMismatchDialogShown = true;
+    _autosaveTimer?.cancel();
+
+    final String? workoutId = widget.workoutId;
+    final String scheduledYmd = _effectiveScheduledYmd;
+
+    if (workoutId != null && workoutId.isNotEmpty) {
+      unawaited(
+        SessionPersistenceService.clearSessionFor(
+          workoutId: workoutId,
+          scheduledDateYmd: scheduledYmd,
+        ).catchError((error) {
+          debugPrint(
+            '[EmptyWorkoutSession] clearSessionFor failed after structure '
+            'mismatch: $error',
+          );
+        }),
+      );
+    } else {
+      unawaited(
+        SessionPersistenceService.clearSession().catchError((error) {
+          debugPrint(
+            '[EmptyWorkoutSession] clearSession failed after structure '
+            'mismatch: $error',
+          );
+        }),
+      );
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      provider.clearActiveSession();
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Session reset'),
+          content: const Text(
+            'This workout changed since you last saved. The in-progress session '
+            'was reset so you can review the updated exercises.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      if (mounted) {
+        Navigator.of(context).maybePop();
+      }
+    });
+  }
+
+  bool _isSessionDayRest() {
+    final DateTime day = _effectiveScheduledDate;
+    if (WorkoutBoxes.hasRestOverrideFor(day)) {
+      return true;
+    }
+    final workoutProvider = context.read<WorkoutProvider>();
+    final String? routineId =
+        widget.routineId ?? workoutProvider.activeDraft?.routineId;
+    if (routineId != null && routineId.isNotEmpty) {
+      return workoutProvider.isRestDay(routineId, day);
+    }
+    return false;
+  }
+
+  Future<bool> _enforceRestDayIfNeeded() async {
+    if (!mounted || _restDialogShown) return false;
+    if (!_isSessionDayRest()) return false;
+    _restDialogShown = true;
+    _autosaveTimer?.cancel();
+    _saveSessionState();
+    if (!mounted) return true;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Session closed'),
+        content: const Text(
+          'This day is now marked as a rest day. The current session has been closed so you can respect the updated schedule.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+    if (mounted) {
+      Navigator.of(context).maybePop();
+    }
+    return true;
+  }
+
   /// Called when the user taps the big "Complete" button in the action bar.
   /// Now responsible for marking the workout as finished at the very end
   /// (last exercise of last block) *before* we show the summary screen.
   Future<void> _handleComplete() async {
+    if (await _enforceRestDayIfNeeded()) return;
     // Save the latest session state before processing completion.
     _saveSessionState();
 
@@ -548,6 +921,11 @@ class _EmptyWorkoutSessionScreenState extends State<EmptyWorkoutSessionScreen>
     final Map<String, int> cumulativeCompletedSets =
         Map<String, int>.from(existing?.completedSets ?? const <String, int>{});
 
+    final Map<String, List<SavedSetData>> cumulativeExerciseSets = {
+      for (final entry in (existing?.exerciseSets ?? const <String, List<SavedSetData>>{}).entries)
+        entry.key: List<SavedSetData>.from(entry.value),
+    };
+
     debugPrint(
       '[EmptyWorkoutSession] _primeSessionState → '
       'workoutId=$workoutId, blockIndex=$blockIndex, '
@@ -576,6 +954,7 @@ class _EmptyWorkoutSessionScreenState extends State<EmptyWorkoutSessionScreen>
       finalRestStarted: false,
       finalRestDone: false,
       scheduledDateIso: scheduledDateIso,
+      exerciseSets: cumulativeExerciseSets,
     );
     SessionPersistenceService.saveSession(state);
   }
@@ -806,6 +1185,9 @@ class _EmptyWorkoutSessionScreenState extends State<EmptyWorkoutSessionScreen>
 
   @override
   Widget build(BuildContext context) {
+    final workoutProvider = context.watch<WorkoutProvider>();
+    _scheduleRestCheck();
+    _consumeWorkoutInvalidationIfAny(workoutProvider);
     final mq = MediaQuery.of(context);
     final bottomSafe = mq.padding.bottom;
 
@@ -902,6 +1284,7 @@ class _EmptyWorkoutSessionScreenState extends State<EmptyWorkoutSessionScreen>
                                   _saveSessionState();
                                 }
                               },
+                              onSnapshotRequested: _saveSessionState,
                               onFinalRestStarted: () {
                                 setState(() {
                                   _finalRestStarted = true;
@@ -1047,6 +1430,7 @@ class TopMirror extends StatefulWidget {
     this.targetWorkSeconds,
     this.targetRestSeconds,
     required this.onSavedCountChanged,
+    required this.onSnapshotRequested,
     this.onFinalRestStarted,
     this.onFinalRestFinished,
     required this.isComplete,
@@ -1066,6 +1450,7 @@ class TopMirror extends StatefulWidget {
   final int? targetWorkSeconds;
   final int? targetRestSeconds;
   final ValueChanged<int> onSavedCountChanged;
+  final VoidCallback onSnapshotRequested;
 
   final VoidCallback? onFinalRestStarted;
   final VoidCallback? onFinalRestFinished;
@@ -1215,6 +1600,7 @@ class _TopMirrorState extends State<TopMirror> {
     }
     _refreshHudFromLocal();
     widget.onSavedCountChanged(_saved.length);
+    widget.onSnapshotRequested();
 
     // 🔧 FIX: Sync restored sets to WorkoutProvider draft
     if (widget.exerciseId != null && sets.isNotEmpty) {
@@ -1313,6 +1699,7 @@ class _TopMirrorState extends State<TopMirror> {
         ?.beginRestPublic(widget.targetRestSeconds); // starts rest countdown
     _refreshHudFromLocal();
     widget.onSavedCountChanged(_saved.length);
+    widget.onSnapshotRequested();
 
     if (nextIndex >= widget.targetSets) {
       debugPrint(

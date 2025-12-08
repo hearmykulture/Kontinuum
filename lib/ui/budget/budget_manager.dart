@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import 'package:kontinuum/providers/budget_provider.dart';
 import 'package:kontinuum/ui/screens/budget/budget_overview_screen.dart';
+import 'package:kontinuum/ui/screens/budget/models/budget_models.dart';
 import 'package:kontinuum/ui/screens/budget/create_budget_screen.dart';
 
 class BudgetManager extends StatefulWidget {
@@ -126,7 +127,8 @@ class _BudgetsHeaderState extends State<_BudgetsHeader> {
           return _BudgetCardSmall(
             size: itemSize,
             title: b.title,
-            monthly: _currency.format(b.monthlyAmount),
+            monthly:
+                '${_currency.format(b.monthlyAmount)} / ${labelForBudgetTimeSpan(b.cadence)}',
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(
                 builder: (_) => BudgetOverviewScreen(budgetId: b.id),
@@ -316,8 +318,8 @@ class _PlaceholderBody extends StatelessWidget {
   Widget build(BuildContext context) {
     return const Align(
       alignment: Alignment.topLeft,
-      child:
-          Text('(Content below the header…) ', style: TextStyle(color: Colors.white54)),
+      child: Text('(Content below the header…) ',
+          style: TextStyle(color: Colors.white54)),
     );
   }
 }

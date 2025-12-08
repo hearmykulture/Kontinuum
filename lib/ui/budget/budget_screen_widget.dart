@@ -7,11 +7,11 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import 'package:kontinuum/ui/widgets/year_progress_date.dart';
-import 'package:kontinuum/ui/theme/app_colors.dart';
 
 // budgets & routing
 import 'package:kontinuum/providers/budget_provider.dart';
 import 'package:kontinuum/ui/screens/budget/budget_overview_screen.dart';
+import 'package:kontinuum/ui/screens/budget/models/budget_models.dart';
 
 typedef ProgressForDay = double Function(DateTime day);
 
@@ -21,9 +21,6 @@ class BudgetScreenWidget extends StatelessWidget {
     required this.selectedDate,
     required this.getProgressForDay,
     required this.onDateSelected,
-
-    // Appearance
-    this.accentColor = AppColors.accentBlue,
 
     // Carousel options
     this.carouselTwoRows = false,
@@ -54,13 +51,15 @@ class BudgetScreenWidget extends StatelessWidget {
 
     /// Report selected budget id up to parent (nullable -> deselect).
     this.onBudgetSelected,
+
+    /// Optional externally-driven selection so parent can highlight a card.
+    this.selectedBudgetId,
   });
 
   // Progress bar inputs
   final DateTime selectedDate;
   final ProgressForDay getProgressForDay;
   final ValueChanged<DateTime> onDateSelected;
-  final Color accentColor;
 
   // Carousel inputs
   final bool carouselTwoRows;
@@ -87,6 +86,9 @@ class BudgetScreenWidget extends StatelessWidget {
   /// Selection notify (id or null when deselected)
   final ValueChanged<String?>? onBudgetSelected;
 
+  /// Optionally control which budget is highlighted.
+  final String? selectedBudgetId;
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -95,7 +97,6 @@ class BudgetScreenWidget extends StatelessWidget {
           selectedDate: selectedDate,
           getProgressForDay: getProgressForDay,
           onDateSelected: onDateSelected,
-          accentColor: accentColor,
         ),
         Transform.translate(
           offset: Offset(0, carouselUnderlap),
@@ -112,6 +113,7 @@ class BudgetScreenWidget extends StatelessWidget {
             showDivider: showDivider,
             onCreateTap: onCreateTap,
             onBudgetSelected: onBudgetSelected, // ← upcall
+            selectedBudgetId: selectedBudgetId,
           ),
         ),
       ],
@@ -145,6 +147,9 @@ class BudgetCarousel extends StatefulWidget {
 
     // selection upcall
     this.onBudgetSelected,
+
+    // external selection
+    this.selectedBudgetId,
   });
 
   final bool twoRows;
@@ -169,6 +174,9 @@ class BudgetCarousel extends StatefulWidget {
   /// Notifies parent of the selected budget id (or null to deselect).
   final ValueChanged<String?>? onBudgetSelected;
 
+  /// Optional externally-driven selected id to keep cards in sync with parent state.
+  final String? selectedBudgetId;
+
   @override
   State<BudgetCarousel> createState() => _BudgetCarouselState();
 }
@@ -181,9 +189,24 @@ class _BudgetCarouselState extends State<BudgetCarousel> {
   String? _selectedBudgetId;
 
   @override
+  void initState() {
+    super.initState();
+    _selectedBudgetId = widget.selectedBudgetId;
+  }
+
+  @override
   void dispose() {
     _scrollCtrl.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant BudgetCarousel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selectedBudgetId != widget.selectedBudgetId &&
+        widget.selectedBudgetId != _selectedBudgetId) {
+      _selectedBudgetId = widget.selectedBudgetId;
+    }
   }
 
   @override
@@ -459,7 +482,8 @@ class _CardBody extends StatelessWidget {
     final parent = context.findAncestorWidgetOfExactType<_BudgetCard>()!;
     final b = parent.budget;
     final formatter = NumberFormat.currency(symbol: '\$', decimalDigits: 2);
-    final amountText = formatter.format(b.monthlyAmount);
+    final amountText =
+        '${formatter.format(b.monthlyAmount)} / ${labelForBudgetTimeSpan(b.cadence)}';
     return _CardBody(
       title: b.title,
       subtitle: amountText,

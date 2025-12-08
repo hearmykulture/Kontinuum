@@ -25,13 +25,14 @@ class BudgetHiveAdapter extends TypeAdapter<BudgetHive> {
       unallocatedAsSavings: fields[5] as bool,
       createdAt: fields[6] as DateTime?,
       updatedAt: fields[7] as DateTime?,
+      cadenceIndex: fields[8] as int?,
     );
   }
 
   @override
   void write(BinaryWriter writer, BudgetHive obj) {
     writer
-      ..writeByte(8)
+      ..writeByte(9)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -47,7 +48,9 @@ class BudgetHiveAdapter extends TypeAdapter<BudgetHive> {
       ..writeByte(6)
       ..write(obj.createdAt)
       ..writeByte(7)
-      ..write(obj.updatedAt);
+      ..write(obj.updatedAt)
+      ..writeByte(8)
+      ..write(obj.cadenceIndex);
   }
 
   @override

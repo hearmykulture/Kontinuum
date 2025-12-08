@@ -235,7 +235,7 @@ class _WorkoutEditorScreenState extends State<WorkoutEditorScreen> {
   // =========================
   // BLOCK ADD / PICK TYPE
   // =========================
-  Future<void> _addBlock() async {
+  void _addBlock(String blockType) {
     final blocks = List<WorkoutBlock>.from(_workout!.blocks);
     blocks.add(
       WorkoutBlock(
@@ -311,6 +311,39 @@ class _WorkoutEditorScreenState extends State<WorkoutEditorScreen> {
     );
 
     _setBlocks(blocks);
+  }
+
+  // Stub handlers for exercise editing (to be implemented)
+  void _onEditExerciseSets(int itemIndex) {
+    // TODO: Implement exercise sets editor
+  }
+
+  void _onEditExerciseReps(int itemIndex) {
+    // TODO: Implement exercise reps editor
+  }
+
+  void _onEditExerciseWork(int itemIndex) {
+    // TODO: Implement exercise work editor
+  }
+
+  void _onEditExerciseRest(int itemIndex) {
+    // TODO: Implement exercise rest editor
+  }
+
+  void _onEditExerciseLoad(int itemIndex) {
+    // TODO: Implement exercise load editor
+  }
+
+  void _onReorderExercise(int oldIndex, int newIndex) {
+    // TODO: Implement exercise reordering
+  }
+
+  void _onLoadUnitChanged(WeightUnit unit) {
+    // TODO: Implement load unit change
+  }
+
+  void _onEditExerciseNote(int itemIndex, String? note) {
+    // TODO: Implement exercise note editor
   }
 
   Future<void> _duplicateExerciseInBlock(int blockIndex, int itemIndex) async {
@@ -493,39 +526,6 @@ class _WorkoutEditorScreenState extends State<WorkoutEditorScreen> {
     _setBlocks(blocks);
   }
 
-  void _moveExerciseInBlock(int blockIndex, int from, int to) {
-    final blocks = List<WorkoutBlock>.from(_workout!.blocks);
-    final block = blocks[blockIndex];
-    final items = List<WorkoutItem>.from(block.items);
-    if (from < 0 || from >= items.length) return;
-    if (to < 0 || to >= items.length) return;
-
-    final item = items.removeAt(from);
-    items.insert(to, item);
-
-    blocks[blockIndex] = WorkoutBlock(
-      type: block.type,
-      title: block.title,
-      items: items,
-    );
-
-    _setBlocks(blocks);
-  }
-
-  void _updateExerciseInBlock(
-      int blockIndex, int itemIndex, WorkoutItem updated) {
-    final blocks = List<WorkoutBlock>.from(_workout!.blocks);
-    final block = blocks[blockIndex];
-    final items = List<WorkoutItem>.from(block.items);
-    if (itemIndex < 0 || itemIndex >= items.length) return;
-    items[itemIndex] = updated;
-    blocks[blockIndex] = WorkoutBlock(
-      type: block.type,
-      title: block.title,
-      items: items,
-    );
-    _setBlocks(blocks);
-  }
 
   // =========================
   // BLOCK META (title/type)
@@ -761,12 +761,21 @@ class _WorkoutEditorScreenState extends State<WorkoutEditorScreen> {
                                     _duplicateExerciseInBlock(index, i),
                                 onViewExerciseDetails: (i) =>
                                     _viewExerciseDetails(index, i),
+                                onEditExerciseSets: _onEditExerciseSets,
+                                onEditExerciseReps: _onEditExerciseReps,
+                                onEditExerciseWork: _onEditExerciseWork,
+                                onEditExerciseRest: _onEditExerciseRest,
+                                onEditExerciseLoad: _onEditExerciseLoad,
+                                onReorderExercise: _onReorderExercise,
                                 onBlockMetaChanged: (title, type) =>
                                     _updateBlockMeta(
                                   index: index,
                                   title: title,
                                   type: type,
                                 ),
+                                loadUnit: WeightUnit.kg,
+                                onLoadUnitChanged: _onLoadUnitChanged,
+                                onEditExerciseNote: _onEditExerciseNote,
                                 onBatch: () => _openBatchTool(index),
                               );
                             },
@@ -830,7 +839,7 @@ class _WorkoutEditorScreenState extends State<WorkoutEditorScreen> {
                           vertical: 10, horizontal: 4),
                       child: Text(
                         _saving ? 'Saving…' : 'Done',
-                        style: TextStyle(
+                        style: const TextStyle(
                           color: kPrimaryText,
                           fontSize: 16,
                         ),

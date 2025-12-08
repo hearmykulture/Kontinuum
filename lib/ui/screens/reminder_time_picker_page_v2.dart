@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 // Hook into your calendar/store models
 import 'package:kontinuum/ui/screens/day_detail_page.dart'
     show DayPlanStore, Reminder;
+import 'package:kontinuum/ui/widgets/corner_icons.dart';
 
 // Popup day→hour sheet (now returns DateTimeRange-like with start/end DateTimes)
 import 'package:kontinuum/ui/widgets/mini_day_hour_sheet.dart' as dh;
@@ -113,34 +114,88 @@ class _EmptyReminderTimePageState extends State<EmptyReminderTimePage> {
   }
 
   void _prefillFromSlice(Reminder slice) {
-    final anchorDay = _day; // already date-only
-    final allDay = slice.start == null && slice.end == null;
+    final DateTime anchorDay = _day;
+    final DateTimeRange? span =
+        DayPlanStore.I.seriesSpan(slice.groupId);
+    if (span == null) {
+      _applySingleSlicePrefill(slice, anchorDay);
+      return;
+    }
+
+    final DateTime startDay = DayPlanStore.dateOnly(span.start);
+    final DateTime endDay = DayPlanStore.dateOnly(span.end);
+    final Reminder? startSlice =
+        _sliceForGroupOn(startDay, slice.groupId);
+    final Reminder? endSlice =
+        _sliceForGroupOn(endDay, slice.groupId);
+
+    if (startSlice == null || endSlice == null) {
+      _applySingleSlicePrefill(slice, anchorDay);
+      return;
+    }
+
+    final bool allDay =
+        startSlice.start == null && startSlice.end == null;
     _allDay = allDay;
 
     if (allDay) {
-      _start = DateTime(anchorDay.year, anchorDay.month, anchorDay.day, 0, 0);
-      _end = DateTime(anchorDay.year, anchorDay.month, anchorDay.day, 23, 59);
-    } else {
-      final s = slice.start!;
-      final endTOD = slice.end ?? TimeOfDay(hour: s.hour + 1, minute: s.minute);
-      _start = DateTime(
-        anchorDay.year,
-        anchorDay.month,
-        anchorDay.day,
-        s.hour,
-        s.minute,
-      );
-      var computedEnd = DateTime(
-        anchorDay.year,
-        anchorDay.month,
-        anchorDay.day,
-        endTOD.hour,
-        endTOD.minute,
-      );
-      if (!computedEnd.isAfter(_start))
-        computedEnd = _start.add(const Duration(hours: 1));
-      _end = computedEnd;
+      _day = startDay;
+      _start = DateTime(startDay.year, startDay.month, startDay.day, 0, 0);
+      _end = DateTime(endDay.year, endDay.month, endDay.day, 23, 59);
+      return;
     }
+
+    _day = startDay;
+    final TimeOfDay startTod =
+        startSlice.start ?? const TimeOfDay(hour: 0, minute: 0);
+    final DateTime startStamp = _combine(startDay, startTod);
+
+    final TimeOfDay endTod = (startDay == endDay)
+        ? (endSlice.end ??
+            TimeOfDay(
+              hour: startTod.hour + 1,
+              minute: startTod.minute,
+            ))
+        : (endSlice.end ?? const TimeOfDay(hour: 23, minute: 59));
+
+    DateTime endStamp = _combine(endDay, endTod);
+    if (!endStamp.isAfter(startStamp)) {
+      endStamp = startStamp.add(const Duration(hours: 1));
+    }
+    _start = startStamp;
+    _end = endStamp;
+  }
+
+  void _applySingleSlicePrefill(Reminder slice, DateTime day) {
+    final bool allDay = slice.start == null && slice.end == null;
+    _allDay = allDay;
+    if (allDay) {
+      _start = DateTime(day.year, day.month, day.day, 0, 0);
+      _end = DateTime(day.year, day.month, day.day, 23, 59);
+      return;
+    }
+
+    final TimeOfDay start = slice.start!;
+    final TimeOfDay end =
+        slice.end ?? TimeOfDay(hour: start.hour + 1, minute: start.minute);
+
+    _start = _combine(day, start);
+    DateTime computedEnd = _combine(day, end);
+    if (!computedEnd.isAfter(_start)) {
+      computedEnd = _start.add(const Duration(hours: 1));
+    }
+    _end = computedEnd;
+  }
+
+  Reminder? _sliceForGroupOn(DateTime day, String groupId) {
+    for (final Reminder r in DayPlanStore.I.reminders(day)) {
+      if (r.groupId == groupId) return r;
+    }
+    return null;
+  }
+
+  DateTime _combine(DateTime day, TimeOfDay tod) {
+    return DateTime(day.year, day.month, day.day, tod.hour, tod.minute);
   }
 
   void _requestKeyboard() {
@@ -298,7 +353,10 @@ class _EmptyReminderTimePageState extends State<EmptyReminderTimePage> {
 
     // When editing, remove the entire group first (so we don't leave orphans).
     if (widget.existing != null) {
-      DayPlanStore.I.removeReminderGroup(widget.existing!.groupId);
+      DayPlanStore.I.removeReminderGroup(
+        widget.existing!.groupId,
+        detachTaskLinks: false,
+      );
     }
 
     // Create per-day slices so existing store/timeline just works.
@@ -341,6 +399,8 @@ class _EmptyReminderTimePageState extends State<EmptyReminderTimePage> {
 
       DayPlanStore.I.addReminder(d, slice);
     }
+
+    DayPlanStore.I.updateTaskReminderForGroup(groupId, start);
 
     _popped = true;
     Navigator.of(context).pop(); // store already updated
@@ -401,34 +461,19 @@ class _EmptyReminderTimePageState extends State<EmptyReminderTimePage> {
                         ),
                       ),
 
-                      // Close / Delete
-                      Positioned(
+                      // Corner icons (delete + close)
+                      CornerIcons(
                         top: 0,
-                        right: 0,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (widget.showDelete && widget.existing != null)
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.delete_outline,
-                                  color: Colors.white,
-                                  size: 26,
-                                ),
-                                tooltip: 'Delete',
-                                onPressed: _deleteOnce,
-                              ),
-                            IconButton(
-                              icon: const Icon(
-                                Icons.close_rounded,
-                                color: Colors.white,
-                                size: 28,
-                              ),
-                              tooltip: 'Close',
-                              onPressed: _closeOnce,
-                            ),
-                          ],
-                        ),
+                        leftIcon: (widget.showDelete && widget.existing != null)
+                            ? Icons.delete_outline
+                            : null,
+                        onLeftPressed: (widget.showDelete && widget.existing != null)
+                            ? _deleteOnce
+                            : null,
+                        leftTooltip: 'Delete',
+                        rightIcon: Icons.close,
+                        onRightPressed: _closeOnce,
+                        rightTooltip: 'Close',
                       ),
 
                       // Middle content

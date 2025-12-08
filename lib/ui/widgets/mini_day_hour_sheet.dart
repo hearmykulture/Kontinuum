@@ -205,76 +205,75 @@ class _MiniDayHourSheetState extends State<MiniDayHourSheet> {
   // ---------- build ----------
   @override
   Widget build(BuildContext context) {
-    final insets = MediaQuery.of(context).viewInsets.bottom;
+    final media = MediaQuery.of(context);
+    final keyboardInset = media.viewInsets.bottom;
+    final safeBottom = media.padding.bottom;
 
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(16, 10, 16, 16 + insets),
-        child: Material(
-          color: Colors.transparent,
-          child: Container(
-            decoration: BoxDecoration(
-              color: _panel,
-              borderRadius: BorderRadius.circular(18),
-            ),
-            padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // handle
-                Container(
-                  width: 44,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: _faint,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
+    return Padding(
+      padding: EdgeInsets.fromLTRB(16, 10, 16, 16 + keyboardInset),
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          decoration: BoxDecoration(
+            color: _panel,
+            borderRadius: BorderRadius.circular(18),
+          ),
+          padding: EdgeInsets.fromLTRB(14, 10, 14, 12 + safeBottom),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // handle
+              Container(
+                width: 44,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: _faint,
+                  borderRadius: BorderRadius.circular(2),
                 ),
-                const SizedBox(height: 12),
+              ),
+              const SizedBox(height: 12),
 
-                // header
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 160),
-                  child: _phase == _Phase.startDay || _phase == _Phase.endDay
-                      ? _RangeDayHeader(
-                          key: ValueKey(
-                            "${_displayedMonth.year}-${_displayedMonth.month}-${_phase.name}",
-                          ),
-                          displayedMonth: _displayedMonth,
-                          phase: _phase,
-                          onPrev: () => _shiftMonth(-1),
-                          onNext: () => _shiftMonth(1),
-                          onClose: () => Navigator.of(context).pop(),
-                        )
-                      : _RangeHourHeader(
-                          key: ValueKey(
-                            "${_phase.name}-${_currentEditingDate().toIso8601String()}",
-                          ),
-                          phase: _phase,
-                          date: _currentEditingDate(),
-                          onBack: () => setState(() {
-                            _phase = (_phase == _Phase.startHour)
-                                ? _Phase.startDay
-                                : _Phase.endDay;
-                          }),
-                          onClose: () => Navigator.of(context).pop(),
+              // header
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 160),
+                child: _phase == _Phase.startDay || _phase == _Phase.endDay
+                    ? _RangeDayHeader(
+                        key: ValueKey(
+                          "${_displayedMonth.year}-${_displayedMonth.month}-${_phase.name}",
                         ),
-                ),
+                        displayedMonth: _displayedMonth,
+                        phase: _phase,
+                        onPrev: () => _shiftMonth(-1),
+                        onNext: () => _shiftMonth(1),
+                        onClose: () => Navigator.of(context).pop(),
+                      )
+                    : _RangeHourHeader(
+                        key: ValueKey(
+                          "${_phase.name}-${_currentEditingDate().toIso8601String()}",
+                        ),
+                        phase: _phase,
+                        date: _currentEditingDate(),
+                        onBack: () => setState(() {
+                          _phase = (_phase == _Phase.startHour)
+                              ? _Phase.startDay
+                              : _Phase.endDay;
+                        }),
+                        onClose: () => Navigator.of(context).pop(),
+                      ),
+              ),
 
-                const SizedBox(height: 6),
+              const SizedBox(height: 6),
 
-                // body
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 180),
-                  switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeInCubic,
-                  child: (_phase == _Phase.startDay || _phase == _Phase.endDay)
-                      ? _buildDayGrid()
-                      : _buildHourGrid(),
-                ),
-              ],
-            ),
+              // body
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 180),
+                switchInCurve: Curves.easeOutCubic,
+                switchOutCurve: Curves.easeInCubic,
+                child: (_phase == _Phase.startDay || _phase == _Phase.endDay)
+                    ? _buildDayGrid()
+                    : _buildHourGrid(),
+              ),
+            ],
           ),
         ),
       ),

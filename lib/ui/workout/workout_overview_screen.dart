@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'package:kontinuum/models/workout_models.dart';
+import 'package:kontinuum/models/session_state.dart';
 import 'package:kontinuum/providers/fitness_profile_provider.dart';
 import 'package:kontinuum/providers/workout_provider.dart';
 import 'package:kontinuum/services/exercise_library_service.dart';
@@ -490,38 +491,56 @@ class _WorkoutOverviewScreenState extends State<WorkoutOverviewScreen> {
 
     if (_exitingToSession) return;
 
-    final block = _currentBlock;
-    final item = _currentItem;
-    final exercise = (item == null)
-        ? null
-        : ExerciseLibraryService.instance.getById(item.exerciseId);
+    final workout = _workout;
+    if (workout == null) return;
 
-    final String safeBlockLabel = block != null
-        ? (block.title?.trim().isNotEmpty == true
-            ? block.title!.trim()
-            : 'Block ${_focusedBlockIndex + 1}')
-        : 'No block';
-    final String safeBlockTypeLabel = block?.type != null
-        ? blockTypeInfo[block!.type]!.label.toUpperCase()
-        : '—';
-    final List<WorkoutItem> blockExercises = block == null
-        ? const <WorkoutItem>[]
-        : List<WorkoutItem>.from(block.items);
-    if (blockExercises.isEmpty) return;
-
+    int blockIndex = _focusedBlockIndex;
     int startExerciseIndex = 0;
+    WorkoutSessionState? resumeSession;
+
     if (resume) {
-      final session = SessionPersistenceService.getCurrentSession();
-      if (session != null &&
-          session.workoutId == _workout?.id &&
-          session.currentBlockIndex == _focusedBlockIndex &&
-          session.currentExerciseIndex >= 0 &&
-          session.currentExerciseIndex < blockExercises.length) {
-        startExerciseIndex = session.currentExerciseIndex;
+      final DateTime effectiveDate = _scheduledDate ?? AppClock.now();
+      final String ymd =
+          SessionPersistenceService.dateTimeToYmd(effectiveDate);
+      resumeSession = SessionPersistenceService.getSessionFor(
+        workoutId: workout.id,
+        scheduledDateYmd: ymd,
+      );
+      resumeSession ??= SessionPersistenceService.getCurrentSession();
+
+      if (resumeSession != null && resumeSession.workoutId == workout.id) {
+        if (workout.blocks.isNotEmpty) {
+          blockIndex = resumeSession.currentBlockIndex.clamp(
+            0,
+            workout.blocks.length - 1,
+          );
+        }
+        startExerciseIndex = resumeSession.currentExerciseIndex;
       }
     }
 
-    final WorkoutItem startItem = blockExercises[startExerciseIndex];
+    if (workout.blocks.isEmpty ||
+        blockIndex < 0 ||
+        blockIndex >= workout.blocks.length) {
+      return;
+    }
+
+    final block = workout.blocks[blockIndex];
+    if (block.items.isEmpty) return;
+    final int safeExerciseIndex =
+        startExerciseIndex.clamp(0, block.items.length - 1);
+    final List<WorkoutItem> blockExercises =
+        List<WorkoutItem>.from(block.items);
+    final WorkoutItem startItem = blockExercises[safeExerciseIndex];
+    final exercise =
+        ExerciseLibraryService.instance.getById(startItem.exerciseId);
+
+    final String safeBlockLabel = block.title?.trim().isNotEmpty == true
+        ? block.title!.trim()
+        : 'Block ${blockIndex + 1}';
+    final String safeBlockTypeLabel = block.type != null
+        ? blockTypeInfo[block.type]!.label.toUpperCase()
+        : '—';
     final exerciseData =
         ExerciseLibraryService.instance.getById(startItem.exerciseId);
     final String safeExerciseTitle = formatTitleCase(
@@ -551,7 +570,7 @@ class _WorkoutOverviewScreenState extends State<WorkoutOverviewScreen> {
             exerciseId: startItem.exerciseId,
             workoutId: _workout?.id,
             routineId: _attachToRoutineId,
-            currentBlockIndex: _focusedBlockIndex,
+            currentBlockIndex: blockIndex,
             totalBlocks: _workout?.blocks.length ?? 1,
             targetSets: startItem.targetSets,
             targetReps: startItem.targetReps,

@@ -25,6 +25,7 @@ import 'package:quill_native_bridge_platform_interface/quill_native_bridge_platf
 
 // App shell / navigation host
 import 'package:kontinuum/app.dart';
+import 'package:kontinuum/ui/screens/day_detail_page.dart' show DayPlanStore;
 
 // Providers
 import 'package:kontinuum/providers/objective_provider.dart';
@@ -478,6 +479,8 @@ Future<void> main() async {
     final projectProvider = ProjectProvider();
     final alignmentProvider = AlignmentScheduleProvider(alignmentScheduleBox);
     NotificationDispatcher.attach(notificationCenterProvider);
+
+    await DayPlanStore.init();
 
     final existingProfile = fitnessProfileProvider.profile;
     if (existingProfile != null) {
